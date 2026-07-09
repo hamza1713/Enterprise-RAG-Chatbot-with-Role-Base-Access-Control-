@@ -1,0 +1,1 @@
+python -m streamlit run app/ui.py --server.port 8501

@@ -1,0 +1,26 @@
+streamlit
+fastapi
+uvicorn
+google-genai
+langchain-google-genai
+langchain
+chromadb
+passlib[bcrypt]
+pandas
+python-dotenv
+requests
+cohere
+langchain-cohere
+duckdb
+tabulate
+pydantic
+python-dotenv
+pytest
+playwright
+pytest-playwright
+langchain-chroma
+PyJWT
+pdfplumber
+# ── RAGAS Evaluation Framework ─────────────────────────────────────────────────
+ragas>=0.2.0
+datasets>=2.14.0
