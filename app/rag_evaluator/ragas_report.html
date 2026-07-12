@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>FinSight — RAGAS Evaluation Report</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+:root {
+  --bg:        #0f172a;
+  --surface:   #1e293b;
+  --surface2:  #273344;
+  --border:    #334155;
+  --text:      #e2e8f0;
+  --text-dim:  #94a3b8;
+  --pass:      #10b981;
+  --warn:      #f59e0b;
+  --fail:      #ef4444;
+  --indigo:    #6366f1;
+  --radius:    12px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 2rem;
+}
+h1 { font-size: 2rem; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+h2 { font-size: 1.25rem; font-weight: 700; color: var(--indigo); margin-bottom: 1rem; }
+h3 { font-size: 1rem; font-weight: 600; color: var(--text-dim); margin-bottom: 0.5rem; }
+.header {
+  display: flex; align-items: center; gap: 1rem;
+  margin-bottom: 2.5rem; padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.header-logo {
+  width: 48px; height: 48px; border-radius: 12px;
+  background: linear-gradient(135deg, var(--indigo), #818cf8);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem;
+}
+.meta { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.25rem; }
+.overall-badge {
+  margin-left: auto;
+  padding: 0.75rem 2rem;
+  border-radius: 50px;
+  font-weight: 800;
+  font-size: 1.1rem;
+  letter-spacing: 1px;
+}
+.overall-pass { background: rgba(16,185,129,0.15); color: var(--pass); border: 2px solid var(--pass); }
+.overall-fail { background: rgba(239,68,68,0.15);  color: var(--fail); border: 2px solid var(--fail); }
+.overall-warn { background: rgba(245,158,11,0.15); color: var(--warn); border: 2px solid var(--warn); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 1rem; margin-bottom: 2rem; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+}
+.stat-card { text-align: center; }
+.stat-value { font-size: 2.5rem; font-weight: 800; line-height: 1; }
+.stat-label { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.35rem; text-transform: uppercase; letter-spacing: 1px; }
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 50px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.badge-pass { background: rgba(16,185,129,0.15); color: var(--pass); }
+.badge-warn { background: rgba(245,158,11,0.15);  color: var(--warn); }
+.badge-fail { background: rgba(239,68,68,0.15);   color: var(--fail); }
+.score-pass { color: var(--pass); font-weight: 700; }
+.score-warn { color: var(--warn); font-weight: 700; }
+.score-fail { color: var(--fail); font-weight: 700; }
+table {
+  width: 100%; border-collapse: collapse;
+  font-size: 0.88rem;
+}
+thead th {
+  background: var(--surface2);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+tbody td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+tbody tr:hover { background: var(--surface2); }
+.progress-bar {
+  display: flex; align-items: center; gap: 0.75rem;
+}
+.bar-track {
+  flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden;
+}
+.bar-fill {
+  height: 100%; border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.bar-pass { background: var(--pass); }
+.bar-warn { background: var(--warn); }
+.bar-fail { background: var(--fail); }
+.bar-val  { font-size: 0.8rem; font-weight: 700; min-width: 45px; text-align: right; }
+.chart-container { height: 350px; position: relative; }
+section { margin-bottom: 2rem; }
+.threshold-note {
+  font-size: 0.78rem; color: var(--text-dim);
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(99,102,241,0.08);
+  border-left: 3px solid var(--indigo);
+  border-radius: 0 4px 4px 0;
+}
+.security-test-row td:first-child { font-family: monospace; font-size: 0.82rem; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-logo">🔎</div>
+    <div>
+      <h1>FinSight Evaluation Report</h1>
+      <div class="meta">RAGAS + RBAC Security Evaluation &nbsp;|&nbsp; 2026-07-12 13:14 UTC</div>
+    </div>
+    <div class="overall-badge overall-fail">❌ FAIL</div>
+  </div>
+
+  
+    <div class="grid-3">
+      <div class="card stat-card">
+        <div class="stat-value score-fail">0.000</div>
+        <div class="stat-label">Avg RAGAS Score</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-value score-pass">0.883</div>
+        <div class="stat-label">RBAC Security Score</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-value">0</div>
+        <div class="stat-label">Roles Evaluated</div>
+      </div>
+    </div>
+    
+  <section><div class='card'><p style='color:var(--text-dim)'>No RAGAS quality evaluation data available.</p></div></section>
+  
+        <section>
+          <h2>🔐 RBAC Authorization Security Tests</h2>
+          <div class="grid-3" style="margin-bottom:1.5rem">
+            <div class="card stat-card">
+              <div class="stat-value score-pass">3</div>
+              <div class="stat-label">Tests Passed</div>
+            </div>
+            <div class="card stat-card">
+              <div class="stat-value score-warn">1</div>
+              <div class="stat-label">Warnings</div>
+            </div>
+            <div class="card stat-card">
+              <div class="stat-value score-fail">1</div>
+              <div class="stat-label">Tests Failed</div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Security Test Results (5 tests)</h3>
+            
+    <table>
+      <thead><tr>
+        <th>Test</th><th>Security Score</th><th>Status</th><th>Details</th>
+      </tr></thead>
+      <tbody><tr class="security-test-row"><td>test_unauthorized_access_blocked</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-fail" style="width:66%"></div></div><span class="bar-val score-fail">0.667</span></div></td><td><span class="badge badge-fail">❌ FAIL</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Checked 12 unauthorized role-query pairs. 4 leakage event(s) detected. Security score: 66.67%…</td></tr><tr class="security-test-row"><td>test_authorized_access_allowed</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Tested 4 authorized role-query pairs. 4/4 returned relevant content. Access score: 100.00%…</td></tr><tr class="security-test-row"><td>test_clevel_sees_all</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-warn" style="width:75%"></div></div><span class="bar-val score-warn">0.750</span></div></td><td><span class="badge badge-warn">⚠️ WARN</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>C-level retrieved docs from: ['engineering', 'finance', 'marketing']. Missing roles: ['hr']. Coverage: 75.00% of departm…</td></tr><tr class="security-test-row"><td>test_general_docs_accessible_to_all</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Tested 8 role-query pairs for general doc access. 8 returned at least one general-tagged document. Accessibility score: …</td></tr><tr class="security-test-row"><td>test_retriever_filter_correctness</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Checked 4 role-pair filter combinations. 0 filter violation(s) detected. Filter precision: 100.00%…</td></tr></tbody>
+    </table>
+    
+          </div>
+        </section>
+        
+
+  <footer style="color:var(--text-dim);font-size:0.78rem;text-align:center;margin-top:3rem;">
+    Generated by FinSight RAGAS Evaluation Framework &nbsp;·&nbsp; 2026-07-12 13:14 UTC
+  </footer>
+
+  
+</body>
+</html>

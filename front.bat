@@ -1,1 +1,3 @@
-python -m streamlit run app/ui.py --server.port 8501
+@echo off
+cd frontend
+npm run dev

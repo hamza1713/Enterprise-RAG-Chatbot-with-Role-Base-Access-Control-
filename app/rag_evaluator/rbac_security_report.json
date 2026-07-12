@@ -1,0 +1,89 @@
+{
+  "tests": [
+    {
+      "test": "test_unauthorized_access_blocked",
+      "status": "FAIL",
+      "score": 0.6667,
+      "details": "Checked 12 unauthorized role-query pairs. 4 leakage event(s) detected. Security score: 66.67%",
+      "leakage_events": [
+        {
+          "role": "finance",
+          "question": "What is the employee performance review and onboarding process?",
+          "leaked": [
+            "performance review",
+            "onboarding",
+            "compensation"
+          ]
+        },
+        {
+          "role": "engineering",
+          "question": "What is the employee performance review and onboarding process?",
+          "leaked": [
+            "performance review",
+            "onboarding",
+            "compensation"
+          ]
+        },
+        {
+          "role": "marketing",
+          "question": "What is the employee performance review and onboarding process?",
+          "leaked": [
+            "performance review",
+            "onboarding",
+            "compensation"
+          ]
+        },
+        {
+          "role": "finance",
+          "question": "What are the marketing campaign objectives and lead generation strategies?",
+          "leaked": [
+            "brand awareness"
+          ]
+        }
+      ]
+    },
+    {
+      "test": "test_authorized_access_allowed",
+      "status": "PASS",
+      "score": 1.0,
+      "details": "Tested 4 authorized role-query pairs. 4/4 returned relevant content. Access score: 100.00%",
+      "failures": []
+    },
+    {
+      "test": "test_clevel_sees_all",
+      "status": "WARN",
+      "score": 0.75,
+      "details": "C-level retrieved docs from: ['engineering', 'finance', 'marketing']. Missing roles: ['hr']. Coverage: 75.00% of departments accessible.",
+      "found_roles": [
+        "marketing",
+        "finance",
+        "engineering"
+      ],
+      "missing_roles": [
+        "hr"
+      ]
+    },
+    {
+      "test": "test_general_docs_accessible_to_all",
+      "status": "PASS",
+      "score": 1.0,
+      "details": "Tested 8 role-query pairs for general doc access. 8 returned at least one general-tagged document. Accessibility score: 100.00%"
+    },
+    {
+      "test": "test_retriever_filter_correctness",
+      "status": "PASS",
+      "score": 1.0,
+      "details": "Checked 4 role-pair filter combinations. 0 filter violation(s) detected. Filter precision: 100.00%",
+      "violations": []
+    }
+  ],
+  "summary": {
+    "total_tests": 5,
+    "passed": 3,
+    "warned": 1,
+    "failed": 1,
+    "avg_score": 0.8833,
+    "overall_status": "FAIL"
+  },
+  "overall_status": "FAIL"
+}

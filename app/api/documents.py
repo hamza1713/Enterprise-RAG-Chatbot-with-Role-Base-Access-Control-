@@ -172,3 +172,113 @@ def preview_pdf(
         raise HTTPException(status_code=404, detail="PDF file not found.")
         
     return FileResponse(clean_path, media_type="application/pdf")
+
+
+@router.get("/documents")
+def list_documents(user: dict = Depends(get_current_user)):
+    user_role = user["role"].lower()
+    conn = get_db_conn()
+    c = conn.cursor()
+    if user_role == "c-level":
+        c.execute("SELECT filename, filepath FROM documents")
+    elif user_role == "general":
+        c.execute("SELECT filename, filepath FROM documents WHERE LOWER(role)='general'")
+    else:
+        c.execute(
+            "SELECT filename, filepath FROM documents WHERE LOWER(role)=? OR LOWER(role)='general'",
+            (user_role,),
+        )
+    rows = c.fetchall()
+    conn.close()
+    return [{"filename": r[0], "filepath": r[1]} for r in rows]
+
+
+@router.get("/documents/content")
+def get_document_content(filepath: str, user: dict = Depends(get_current_user)):
+    user_role = user["role"].lower()
+    clean_path = str(Path(filepath).resolve())
+    
+    # RBAC check
+    conn = get_db_conn()
+    c = conn.cursor()
+    if user_role == "c-level":
+        c.execute("SELECT 1 FROM documents WHERE filepath=?", (clean_path,))
+    elif user_role == "general":
+        c.execute("SELECT 1 FROM documents WHERE filepath=? AND LOWER(role)='general'", (clean_path,))
+    else:
+        c.execute(
+            "SELECT 1 FROM documents WHERE filepath=? AND (LOWER(role)=? OR LOWER(role)='general')",
+            (clean_path, user_role)
+        )
+    allowed = c.fetchone()
+    conn.close()
+    
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Access denied to this file path.")
+        
+    if not os.path.exists(clean_path):
+        raise HTTPException(status_code=404, detail="File not found.")
+        
+    ext = os.path.splitext(clean_path)[1].lower()
+    try:
+        if ext == ".csv":
+            import math
+            df = pd.read_csv(clean_path)
+
+            def _safe(val):
+                """Convert any non-JSON-safe value to None."""
+                if val is None:
+                    return None
+                if isinstance(val, float):
+                    if math.isnan(val) or math.isinf(val):
+                        return None
+                    return val
+                # pandas NA / NaT
+                try:
+                    if pd.isna(val):
+                        return None
+                except (TypeError, ValueError):
+                    pass
+                return val
+
+            columns = df.columns.tolist()
+            data = [
+                {col: _safe(row[col]) for col in columns}
+                for row in df.to_dict(orient="records")
+            ]
+            return JSONResponse(content={
+                "type": "csv",
+                "columns": columns,
+                "data": data,
+            })
+        elif ext == ".md":
+            with open(clean_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            return {"type": "markdown", "content": content}
+        else:
+            raise HTTPException(status_code=400, detail="Previewing this file type is not supported.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
+
+
+@router.get("/system-metrics")
+def get_system_metrics(user: dict = Depends(get_current_user)):
+    if user["role"].lower() != "c-level":
+        raise HTTPException(status_code=403, detail="Access restricted to C-Level users.")
+    metrics = {"docs": 0, "users": 0, "roles": 0, "tables": 0}
+    try:
+        conn = get_db_conn()
+        c = conn.cursor()
+        metrics["docs"]  = c.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        metrics["users"] = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        metrics["roles"] = c.execute("SELECT COUNT(*) FROM roles").fetchone()[0]
+        conn.close()
+        
+        from app.core.config import DUCKDB_PATH
+        dc = duckdb.connect(str(DUCKDB_PATH), read_only=True)
+        metrics["tables"] = dc.execute("SELECT COUNT(*) FROM tables_metadata").fetchone()[0]
+        dc.close()
+    except Exception as exc:
+        logger.warning(f"Failed to fetch system metrics: {exc}")
+    return metrics
+
