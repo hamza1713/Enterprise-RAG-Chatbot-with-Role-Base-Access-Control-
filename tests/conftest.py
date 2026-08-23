@@ -30,11 +30,4 @@ def init_test_db():
     init_sqlite_schema()
     init_duckdb_schema()
     seed_default_users()
-
-@pytest.fixture(scope="function")
-def context(browser):
-    return browser.new_context(record_video_dir="videos/")
-
-@pytest.fixture(scope="function")
-def page(context):
-    return context.new_page()
+

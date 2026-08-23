@@ -22,6 +22,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
+import pandas as pd
 from pydantic import BaseModel
 
 from app.api.auth import get_current_user
@@ -102,7 +103,15 @@ def _run_evaluation_background(
     global _eval_running
 
     started_at = datetime.now(timezone.utc).isoformat()
-    _save_status({"status": "running", "started_at": started_at})
+    
+    # Preserve previous results when starting a new run
+    status = _load_status()
+    status.update({
+        "status":     "running",
+        "started_at": started_at,
+        "error":      None,
+    })
+    _save_status(status)
     logger.info(f"[Evaluate] Starting evaluation | mode={mode} roles={roles}")
 
     ragas_results   = None
@@ -149,6 +158,7 @@ def _run_evaluation_background(
             "started_at":       started_at,
             "completed_at":     completed_at,
             "overall":          ragas_results.get("overall") if ragas_results else None,
+            "per_role":         ragas_results.get("per_role") if ragas_results else None,
             "pass_fail":        ragas_results.get("pass_fail") if ragas_results else None,
             "rbac_overall":     security_report.get("overall_status") if security_report else None,
             "report_available": REPORT_HTML.exists(),
@@ -219,7 +229,16 @@ async def trigger_evaluation(
     response_model=None,
 )
 async def get_evaluation_status(_user: dict = Depends(_require_clevel)):
+    global _eval_running
     status = _load_status()
+    
+    # Auto-recover if status on disk is "running" but no background task is actually running in memory
+    if status.get("status") == "running" and not _eval_running:
+        status["status"] = "failed"
+        status["error"] = "Evaluation was interrupted (server restart or crash)."
+        status["completed_at"] = datetime.now(timezone.utc).isoformat()
+        _save_status(status)
+        
     status["report_available"] = REPORT_HTML.exists()
     return JSONResponse(content=status)
 
@@ -255,6 +274,7 @@ async def get_evaluation_results(_user: dict = Depends(_require_clevel)):
 
     result = {
         "ragas_scores":   status.get("overall"),
+        "per_role":       status.get("per_role"),
         "pass_fail":      status.get("pass_fail"),
         "rbac_status":    status.get("rbac_overall"),
         "completed_at":   status.get("completed_at"),
@@ -269,3 +289,35 @@ async def get_evaluation_results(_user: dict = Depends(_require_clevel)):
             pass
 
     return JSONResponse(content=result)
+
+
+@router.get(
+    "/records",
+    summary="Get detailed RAGAS evaluation records",
+)
+async def get_evaluation_records(_user: dict = Depends(_require_clevel)):
+    csv_path = EVAL_DIR / "evaluation_results_ragas.csv"
+    if not csv_path.exists():
+        # Fallback to quick evaluation CSV if exists
+        csv_path = EVAL_DIR / "evaluation_results_ragas_quick.csv"
+    
+    if not csv_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No evaluation records found. Run an evaluation first."
+        )
+    try:
+        import math
+        df = pd.read_csv(csv_path)
+        records = df.to_dict(orient="records")
+        # Replace float NaN/NaT values with None so they parse as null in JSON
+        for rec in records:
+            for k, v in rec.items():
+                if isinstance(v, float) and math.isnan(v):
+                    rec[k] = None
+        return JSONResponse(content={"records": records})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load evaluation records: {exc}"
+        )

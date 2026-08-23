@@ -46,6 +46,7 @@ def _get_gemini_model():
         temperature=0.2,
         google_api_key=google_api_key or "DUMMY_KEY",
         transport="rest",
+        max_retries=1,
     )
 
 

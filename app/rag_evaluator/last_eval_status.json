@@ -1,4 +1,53 @@
 {
-  "status": "running",
-  "started_at": "2026-07-12T13:22:09.532566+00:00"
+  "status": "completed",
+  "started_at": "2026-08-08T21:19:38.946052+00:00",
+  "completed_at": "2026-08-08T21:23:06.446734+00:00",
+  "evaluation_mode": "no_llm_embedding_statistical",
+  "overall": {
+    "answer_relevancy": 0.840221876447851,
+    "context_recall": 0.7500944147507349,
+    "context_precision": 0.6135968652448408,
+    "faithfulness_token": 0.5348503007440655,
+    "answer_similarity": 0.8167200521989302
+  },
+  "per_role": {
+    "engineering": {
+      "answer_relevancy": 0.7942429780960083,
+      "context_recall": 0.7022936741511027,
+      "context_precision": 0.5730265593421205,
+      "faithfulness_token": 0.47825433589764793,
+      "answer_similarity": 0.7802228331565857
+    },
+    "finance": {
+      "answer_relevancy": 0.8564083695411682,
+      "context_recall": 0.7849981049696604,
+      "context_precision": 0.7128828741954453,
+      "faithfulness_token": 0.37995683697297833,
+      "answer_similarity": 0.8373582601547241
+    },
+    "hr": {
+      "answer_relevancy": 0.8429782092571259,
+      "context_recall": 0.7184149871269861,
+      "context_precision": 0.5274403248068046,
+      "faithfulness_token": 0.5915307438264729,
+      "answer_similarity": 0.8091709017753601
+    },
+    "marketing": {
+      "answer_relevancy": NaN,
+      "context_recall": NaN,
+      "context_precision": 0.5985503825984833,
+      "faithfulness_token": 0.8936170212765957,
+      "answer_similarity": NaN
+    }
+  },
+  "pass_fail": {
+    "answer_relevancy": "PASS",
+    "context_recall": "PASS",
+    "context_precision": "PASS",
+    "faithfulness_token": "WARN",
+    "answer_similarity": "PASS"
+  },
+  "n_samples": 14,
+  "rbac_overall": "PASS",
+  "report_available": true
 }

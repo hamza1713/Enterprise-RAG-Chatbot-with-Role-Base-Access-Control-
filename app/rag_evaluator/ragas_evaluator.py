@@ -82,6 +82,7 @@ def _build_ragas_llm():
         temperature=0.1,   # Low temp for consistent evaluation judgements
         google_api_key=google_api_key or "DUMMY_KEY",
         transport="rest",
+        max_retries=1,
     )
     return LangchainLLMWrapper(llm)
 
@@ -132,16 +133,19 @@ def run_ragas_evaluation(
           "csv_path"   → path to saved CSV
     """
     from ragas import evaluate
-    # RAGAS 0.4+: LLMContextRecall and AnswerCorrectness moved to ragas.metrics.collections
-    try:
-        from ragas.metrics.collections import LLMContextRecall, AnswerCorrectness
-    except ImportError:
-        from ragas.metrics import LLMContextRecall, AnswerCorrectness  # type: ignore[no-redef]
-    from ragas.metrics import (
-        Faithfulness,
-        AnswerRelevancy,
-        ContextPrecision,
-    )
+    # IMPORTANT: ragas.metrics.collections dropped LangchainLLMWrapper support.
+    # We MUST use ragas.metrics (the legacy path) which still works with
+    # LangchainLLMWrapper + Gemini. Deprecation warnings are suppressed.
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.filterwarnings("ignore", category=DeprecationWarning)
+        from ragas.metrics import (
+            Faithfulness,
+            AnswerRelevancy,
+            ContextPrecision,
+            LLMContextRecall,
+            AnswerCorrectness,
+        )
 
     # ── Build evaluator LLM and embeddings ─────────────────────────────────────
     logger.info("[RAGAS] Initialising Gemini evaluator LLM and embeddings…")
@@ -159,13 +163,15 @@ def run_ragas_evaluation(
         ]
 
     logger.info(f"[RAGAS] Running evaluation on {len(dataset)} samples "
-                f"with {len(metrics)} metrics…")
+                f"with {len(metrics)} metrics\u2026")
 
-    # ── Run full evaluation (suppress deprecation — evaluate() still functional) ─
-    import warnings as _w
-    with _w.catch_warnings():
-        _w.filterwarnings("ignore", category=DeprecationWarning, module="ragas")
-        result = evaluate(dataset=dataset, metrics=metrics)
+    # ── Run full evaluation (suppress deprecation warnings) ─────────────────────
+    import warnings as _ww
+    from ragas.run_config import RunConfig
+    run_config = RunConfig(max_workers=2, timeout=60, max_retries=10)
+    with _ww.catch_warnings():
+        _ww.filterwarnings("ignore", category=DeprecationWarning)
+        result = evaluate(dataset=dataset, metrics=metrics, run_config=run_config)
     df     = result.to_pandas()
 
     # ── Save to CSV ────────────────────────────────────────────────────────────
@@ -239,7 +245,12 @@ def run_quick_evaluation(
     Run evaluation using only reference-free metrics (Faithfulness + AnswerRelevancy).
     Useful when ground truth is not available, or for a fast smoke test.
     """
-    from ragas.metrics import Faithfulness, AnswerRelevancy
+    # IMPORTANT: Must use ragas.metrics (legacy), NOT ragas.metrics.collections.
+    # collections dropped LangchainLLMWrapper support; legacy still works with Gemini.
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.filterwarnings("ignore", category=DeprecationWarning)
+        from ragas.metrics import Faithfulness, AnswerRelevancy
     ragas_llm  = _build_ragas_llm()
     ragas_embs = _build_ragas_embeddings()
 

@@ -226,7 +226,7 @@ Browser ──► React SPA (5173) ──► POST /chat-stream (8000)
                                     SQL│      │RAG
                            ┌──────────▼┐    ┌▼──────────────┐
                            │ NL→SQL    │    │ Embed question │
-                           │ (Gemini)  │    │ (text-embed-4) │
+                           │ (Gemini)  │    │ (gemini-embedding-2-preview) │
                            └──────┬────┘    └──────┬─────────┘
                                   │                │
                            ┌──────▼────┐    ┌──────▼─────────┐
@@ -372,7 +372,7 @@ Two independent evaluation tracks run via `POST /evaluate` (C-Level only):
 |-------|-----------|---------|
 | **LLM** | Google Gemini (2.5 Flash / Pro, fallback chain) | `google-genai ≥1.64` |
 | **Orchestration** | LangChain + LangChain-Chroma | `≥0.3.28` |
-| **Embeddings** | `text-embedding-004` (Google) | via `langchain-google-genai ≥2.1.3` |
+| **Embeddings** | `gemini-embedding-2-preview` (Google) | via `langchain-google-genai ≥2.1.3` |
 | **Reranker** | Cohere Rerank v3 | `langchain-cohere ≥0.3.5` |
 | **Vector DB** | ChromaDB | `≥0.5.23` |
 | **SQL Engine** | DuckDB | `≥1.3.2` (in-process) |
@@ -431,19 +431,20 @@ finsight/
 │   │   └── config.py                   # RAG-specific env setup
 │   │
 │   ├── rag_evaluator/                  # Evaluation framework
-│   │   ├── ragas_evaluator.py          # RAGAS quality metrics runner
+│   │   ├── ragas_evaluator.py          # RAGAS quality metrics runner (LLM-as-judge)
+│   │   ├── no_llm_evaluator.py         # Quota-free embedding + statistical evaluator
 │   │   ├── rbac_security_eval.py       # 6 RBAC security tests
-│   │   ├── eval_dataset.py             # Synthetic QA pair generation
+│   │   ├── eval_dataset.py             # Synthetic QA pair generation & loader
 │   │   ├── eval_report.py              # HTML report builder
-│   │   └── qa_pairs_openai.csv         # Pre-generated evaluation dataset
+│   │   ├── evaluation_results_no_llm.csv # Evaluated results (no-LLM metrics)
+│   │   ├── evaluation_results_ragas_quick.csv # Quick RAGAS results
+│   │   └── qa_pairs_openai.csv         # Curated evaluation dataset
 │   │
-│   └── rag_utils/                      # Public re-export shims (backward compat)
-│       └── __init__.py
-│
 ├── frontend/                           # React 19 + TypeScript SPA (Vite)
 │   ├── index.html
 │   ├── vite.config.ts
 │   ├── package.json
+│   ├── .env.example                    # Frontend environment template
 │   ├── tsconfig.app.json
 │   └── src/
 │       ├── main.tsx                    # React DOM entry point
@@ -495,17 +496,19 @@ finsight/
 │
 ├── tests/
 │   ├── conftest.py
-│   ├── test_chatbot.py                 # Backend API tests (Pytest + TestClient)
-│   ├── test_ragas_eval.py              # Evaluation pipeline tests
-│   └── test_ui.py                      # E2E UI tests (Playwright)
+│   ├── test_chatbot.py                 # Backend API & RBAC tests (Pytest + TestClient)
+│   ├── test_ragas_eval.py              # Evaluation pipeline & threshold tests
+│   └── sample_docs/                    # Sample documents for isolated test runs
 │
-├── chroma_db/                          # ChromaDB persistent storage
-├── videos/                             # Playwright E2E recordings
-├── roles_docs.db                       # SQLite metadata database
-├── report.html                         # Pytest HTML report
+├── run_no_llm_evaluation.py            # Standalone fast quota-free evaluation CLI
+├── run_full_ragas_evaluation.py         # Standalone full RAGAS evaluation CLI
 ├── back.bat                            # Windows: start FastAPI (port 8000)
 ├── front.bat                           # Windows: start React dev server (port 5173)
-├── .env.example                        # Environment variable template
+├── Dockerfile.backend                  # Dockerfile for FastAPI backend
+├── Dockerfile.frontend                 # Dockerfile for React/Vite frontend
+├── docker-compose.yml                  # Docker Compose configuration
+├── .dockerignore                       # Exclude patterns for Docker builds
+├── .env.example                        # Backend environment variable template
 ├── requirements.txt                    # Python dependencies (pinned ranges)
 └── pyproject.toml                      # PEP 517 project metadata + pytest markers
 ```
@@ -658,14 +661,27 @@ GOOGLE_API_KEY=your_google_gemini_api_key_here
 
 ### 6. Start the Application
 
-**Option A — Windows batch files (two separate terminals):**
+**Option A — Docker Compose (Recommended - runs in containers):**
+
+Ensure you have Docker and Docker Compose installed, then run:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- The FastAPI backend container on port `8000` (auto-reloading on python file changes).
+- The React/Vite frontend container on port `5173` (with hot-module reloading/HMR active).
+- SQLite/DuckDB/ChromaDB databases are persisted on the host, so data persists when containers stop.
+
+**Option B — Windows batch files (two separate terminals):**
 
 ```bat
 back.bat    # Terminal 1 — starts FastAPI on port 8000
 front.bat   # Terminal 2 — starts React dev server on port 5173
 ```
 
-**Option B — Manual (two terminals):**
+**Option C — Manual (two terminals):**
 
 ```bash
 # Terminal 1 — FastAPI backend
@@ -720,78 +736,77 @@ All settings are loaded from environment variables (`.env`):
 
 ## 🧪 Testing
 
-### Backend API Tests (Pytest)
+FinSight includes comprehensive unit and integration test suites covering the backend API, RBAC security gates, and evaluation thresholds.
+
+### 1. Backend API & RBAC Tests (Pytest)
+
+Run all API, authentication, query classifier, and RBAC security tests:
 
 ```bash
-pytest tests/test_chatbot.py -v --html=report.html
+pytest tests/test_chatbot.py -v
 ```
 
-Tests cover:
-- JWT authentication flow
-- RBAC denial for cross-department queries
-- Query classifier routing (SQL vs RAG)
-- SQL execution and fallback to RAG
+**Tests cover:**
+- JWT authentication flow (issuance, expiration, and invalid token rejection)
+- RBAC denial for cross-department queries (zero data leakage guarantee)
+- Query classifier routing (SQL vs RAG vs Greetings)
+- Natural language to SQL generation and DuckDB execution
 - Document upload and indexing status
 
-### E2E UI Tests (Playwright)
-
-> Ensure both backend (port 8000) and frontend (port 5173) are running first.
+### 2. Evaluation Pipeline & Threshold Tests
 
 ```bash
-# Install Playwright browsers (first time only)
-playwright install chromium
-
-# Run with visible browser
-pytest tests/test_ui.py --headed -v
-
-# Run headless with video recording
-pytest tests/test_ui.py -v
-```
-
-Video recordings are saved to `videos/`.
-
-### RAGAS Evaluation Tests
-
-```bash
+# Run fast unit tests (no live API calls required):
 pytest tests/test_ragas_eval.py -v -m "not slow"
+
+# Run full test suite:
+pytest -v
 ```
 
 ---
 
 ## 📈 Evaluation Framework
 
-FinSight ships with a two-track evaluation system accessible via the **Evaluation** page (C-Level only) or via API.
+FinSight provides a robust, two-tier evaluation framework:
 
-### RAGAS Quality Metrics
+### 1. Quota-Free Fast Evaluation (`run_no_llm_evaluation.py`)
 
-```bash
-POST /evaluate
-{
-  "mode": "quality_only",
-  "max_per_role": 15,
-  "use_builtin_dataset": false
-}
-```
-
-| Metric | Measures |
-|--------|---------| 
-| **Faithfulness** | Is every claim in the answer supported by retrieved context? |
-| **Answer Relevancy** | Does the answer address the actual question? |
-| **Context Recall** | Was all necessary context retrieved? |
-| **Context Precision** | Were retrieved chunks relevant (not noisy)? |
-
-Results are displayed as an interactive **bar chart** in the Evaluation page (Recharts) and exported as a downloadable HTML report.
-
-### RBAC Security Evaluation
+A zero-cost, lightning-fast evaluation runner that uses local mathematical and statistical metrics (Cosine similarity on Google embeddings, BM25 token overlap, and ROUGE-L sequence matching) without consuming LLM-as-judge API quota:
 
 ```bash
-POST /evaluate
-{
-  "mode": "security_only"
-}
+python run_no_llm_evaluation.py
 ```
 
-Runs 6 automated security tests against the live system. Results are scored 0.0–1.0 (higher = more secure). The full HTML report is available at `GET /evaluate/report`.
+| Metric | Computation Method | Description |
+|--------|-------------------|-------------|
+| **`context_recall`** | `cos_sim(mean(contexts), reference)` | Measures semantic recall of necessary context |
+| **`answer_relevancy`** | `cos_sim(question, answer)` | Measures direct relevance of generated answer to question |
+| **`context_precision`** | BM25 top chunk scoring | Evaluates signal-to-noise ratio in retrieved context |
+| **`faithfulness_token`** | ROUGE-L token recall | Measures factual alignment of answer against context |
+| **`answer_similarity`** | `cos_sim(answer, reference)` | Assesses semantic agreement with ground-truth reference |
+
+### 2. Full RAGAS LLM-as-Judge Evaluation (`run_full_ragas_evaluation.py`)
+
+Executes live RAG queries and evaluates answers using Gemini LLM-as-judge:
+
+```bash
+python run_full_ragas_evaluation.py
+```
+
+### 3. RBAC Security Test Suite
+
+Evaluates access control integrity with 6 automated security tests:
+1. `test_unauthorized_access_blocked`: Cross-department access attempts are blocked.
+2. `test_authorized_access_allowed`: Department users can access their own department documents.
+3. `test_clevel_sees_all`: C-Level administrators have cross-department visibility.
+4. `test_general_docs_accessible_to_all`: General/company-wide docs are accessible to all roles.
+5. `test_retriever_filter_correctness`: ChromaDB metadata filter enforces role boundaries.
+6. `test_authorization_leakage_score`: RAGAS leakage score verification.
+
+### 4. Interactive Web Evaluation Dashboard & HTML Reports
+
+- **C-Level Evaluation Dashboard:** Navigate to `/evaluation` in the React UI to view real-time scorecards, interactive Recharts bar charts, and individual QA records.
+- **HTML Report Export:** A comprehensive visual report is automatically compiled to `app/rag_evaluator/ragas_report.html` and downloadable via `GET /evaluate/report`.
 
 ---
 

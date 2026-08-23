@@ -21,20 +21,19 @@ from typing import List
 # Apply RAG env-vars before any LangChain imports
 import app.rag.config  # noqa: F401 — side-effect: sets GOOGLE_API_KEY etc.
 
-from langchain.schema import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain.prompts import ChatPromptTemplate
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from pydantic import ConfigDict
 
 try:
     from langchain_cohere import CohereRerank
-    from langchain.retrievers import ContextualCompressionRetriever
     _COHERE_AVAILABLE = True
 except ImportError:
     _COHERE_AVAILABLE = False
@@ -129,12 +128,21 @@ google_embeddings = RetryingEmbeddings(
     request_options={"timeout": 15.0},
 )
 
+from chromadb.config import Settings
+
+_chroma_settings = Settings(
+    anonymized_telemetry=False,
+    is_persistent=True,
+    persist_directory="chroma_db",
+)
+
 _vs_lock = threading.Lock()
 
 vectorstore = Chroma(
     collection_name="my_collection",
     persist_directory="chroma_db",
     embedding_function=google_embeddings,
+    client_settings=_chroma_settings,
 )
 
 
@@ -165,6 +173,7 @@ def _reinit_vectorstore() -> None:
             collection_name="my_collection",
             persist_directory="chroma_db",
             embedding_function=google_embeddings,
+            client_settings=_chroma_settings,
         )
     try:
         Path("chroma_db/.semantic_chunking_migrated").touch()
@@ -424,9 +433,14 @@ model = ChatGoogleGenerativeAI(
     temperature=0.2,
     google_api_key=google_api_key or "DUMMY_KEY",
     transport="rest",
+    max_retries=1,
 ).with_fallbacks([
     ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.2,
-                           google_api_key=google_api_key or "DUMMY_KEY", transport="rest"),
+                           google_api_key=google_api_key or "DUMMY_KEY", transport="rest",
+                           max_retries=1),
+    ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.2,
+                           google_api_key=google_api_key or "DUMMY_KEY", transport="rest",
+                           max_retries=1),
 ])
 
 
@@ -555,27 +569,37 @@ class HybridMultiQueryRetriever(BaseRetriever):
 # ════════════════════════════════════════════════════════════════════════════════
 
 def get_rag_chain(user_role: str, cohere_api_key: str | None = None):
-    from langchain.prompts import PromptTemplate
+    """
+    Build a RAG chain using pure langchain_core LCEL runnables.
+    Returns a runnable that accepts {"input": str} and produces
+    {"answer": str, "context": list[Document], "input": str}.
+    """
+    retriever = HybridMultiQueryRetriever(
+        user_role=user_role,
+        cohere_key=cohere_api_key,
+    )
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", build_system_prompt(user_role)),
         ("human", "{input}"),
     ])
 
-    doc_prompt = PromptTemplate.from_template(
-        "--- SOURCE: {source} ---\n{page_content}\n--- END SOURCE ---"
-    )
+    def format_docs(docs: list[Document]) -> str:
+        parts = []
+        for doc in docs:
+            src = doc.metadata.get("source", "unknown")
+            parts.append(f"--- SOURCE: {src} ---\n{doc.page_content}\n--- END SOURCE ---")
+        return "\n\n".join(parts)
 
-    qa_chain = create_stuff_documents_chain(
-        model,
-        prompt,
-        document_prompt=doc_prompt,
-        document_separator="\n\n",
-    )
+    def build_output(inputs: dict) -> dict:
+        """Replicates the create_retrieval_chain output schema."""
+        question  = inputs["input"]
+        context   = retriever.invoke(question)
+        formatted = format_docs(context)
+        # Fill the {context} placeholder in the system prompt
+        filled_prompt = prompt.format_messages(input=question, context=formatted)
+        response = model.invoke(filled_prompt)
+        answer = response.content if hasattr(response, "content") else str(response)
+        return {"input": question, "context": context, "answer": answer}
 
-    retriever = HybridMultiQueryRetriever(
-        user_role=user_role,
-        cohere_key=cohere_api_key,
-    )
-
-    return create_retrieval_chain(retriever, qa_chain)
+    return RunnableLambda(build_output)

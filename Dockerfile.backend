@@ -1,0 +1,35 @@
+# Use python:3.10-slim as base image
+FROM python:3.10-slim
+
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# Set working directory
+WORKDIR /app
+
+# Install system packages required for native extensions and compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    python3-dev \
+    libgomp1 \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy dependency requirements file
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application source code
+COPY . /app
+
+# Expose FastAPI application port
+EXPOSE 8000
+
+# Run Uvicorn server in dev mode with hot-reloading on 0.0.0.0:8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

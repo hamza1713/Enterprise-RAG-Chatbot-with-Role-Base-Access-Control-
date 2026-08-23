@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pandas as pd
 import pdfplumber
-from langchain.schema import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from google import genai
 
 from app.core.config import google_api_key, generate_content_with_fallback

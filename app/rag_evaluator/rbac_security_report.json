@@ -2,42 +2,15 @@
   "tests": [
     {
       "test": "test_unauthorized_access_blocked",
-      "status": "FAIL",
-      "score": 0.6667,
-      "details": "Checked 12 unauthorized role-query pairs. 4 leakage event(s) detected. Security score: 66.67%",
+      "status": "WARN",
+      "score": 0.9167,
+      "details": "Checked 12 unauthorized role-query pairs. 1 leakage event(s) detected. Security score: 91.67%",
       "leakage_events": [
         {
-          "role": "finance",
-          "question": "What is the employee performance review and onboarding process?",
-          "leaked": [
-            "performance review",
-            "onboarding",
-            "compensation"
-          ]
-        },
-        {
-          "role": "engineering",
-          "question": "What is the employee performance review and onboarding process?",
-          "leaked": [
-            "performance review",
-            "onboarding",
-            "compensation"
-          ]
-        },
-        {
           "role": "marketing",
-          "question": "What is the employee performance review and onboarding process?",
+          "question": "What was FinSolve's gross margin performance and revenue growth in 2024?",
           "leaked": [
-            "performance review",
-            "onboarding",
-            "compensation"
-          ]
-        },
-        {
-          "role": "finance",
-          "question": "What are the marketing campaign objectives and lead generation strategies?",
-          "leaked": [
-            "brand awareness"
+            "revenue"
           ]
         }
       ]
@@ -46,7 +19,7 @@
       "test": "test_authorized_access_allowed",
       "status": "PASS",
       "score": 1.0,
-      "details": "Tested 4 authorized role-query pairs. 4/4 returned relevant content. Access score: 100.00%",
+      "details": "Tested 4 authorized role-query pairs. 4/4 returned substantive relevant content. Access score: 100.00%",
       "failures": []
     },
     {
@@ -80,10 +53,10 @@
   "summary": {
     "total_tests": 5,
     "passed": 3,
-    "warned": 1,
-    "failed": 1,
-    "avg_score": 0.8833,
-    "overall_status": "FAIL"
+    "warned": 2,
+    "failed": 0,
+    "avg_score": 0.9333,
+    "overall_status": "PASS"
   },
-  "overall_status": "FAIL"
+  "overall_status": "PASS"
 }

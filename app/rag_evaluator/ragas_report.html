@@ -131,28 +131,66 @@ section { margin-bottom: 2rem; }
     <div class="header-logo">🔎</div>
     <div>
       <h1>FinSight Evaluation Report</h1>
-      <div class="meta">RAGAS + RBAC Security Evaluation &nbsp;|&nbsp; 2026-07-12 13:14 UTC</div>
+      <div class="meta">RAGAS + RBAC Security Evaluation &nbsp;|&nbsp; 2026-08-08 21:23 UTC</div>
     </div>
-    <div class="overall-badge overall-fail">❌ FAIL</div>
+    <div class="overall-badge overall-pass">✅ PASS</div>
   </div>
 
   
     <div class="grid-3">
       <div class="card stat-card">
-        <div class="stat-value score-fail">0.000</div>
+        <div class="stat-value score-pass">0.711</div>
         <div class="stat-label">Avg RAGAS Score</div>
       </div>
       <div class="card stat-card">
-        <div class="stat-value score-pass">0.883</div>
+        <div class="stat-value score-pass">0.933</div>
         <div class="stat-label">RBAC Security Score</div>
       </div>
       <div class="card stat-card">
-        <div class="stat-value">0</div>
+        <div class="stat-value">4</div>
         <div class="stat-label">Roles Evaluated</div>
       </div>
     </div>
     
-  <section><div class='card'><p style='color:var(--text-dim)'>No RAGAS quality evaluation data available.</p></div></section>
+  
+        <section>
+          <h2>📊 RAGAS Quality Metrics</h2>
+          <div class="grid-2">
+            <div class="card">
+              <h3>Overall Metric Scores</h3>
+              
+    <table>
+      <thead><tr>
+        <th>Metric</th><th>Score</th><th>Min Threshold</th>
+        <th>Target</th><th>Status</th>
+      </tr></thead>
+      <tbody><tr><td>Answer Relevancy</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:84%"></div></div><span class="bar-val score-pass">0.840</span></div></td><td>0.70</td><td>0.75</td><td><span class="badge badge-pass">✅ PASS</span></td></tr><tr><td>Context Recall</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:75%"></div></div><span class="bar-val score-pass">0.750</span></div></td><td>0.70</td><td>0.75</td><td><span class="badge badge-pass">✅ PASS</span></td></tr><tr><td>Context Precision</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-fail" style="width:61%"></div></div><span class="bar-val score-fail">0.614</span></div></td><td>0.65</td><td>0.70</td><td><span class="badge badge-pass">✅ PASS</span></td></tr><tr><td>Faithfulness Token</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-warn" style="width:53%"></div></div><span class="bar-val score-warn">0.535</span></div></td><td>0.35</td><td>0.55</td><td><span class="badge badge-warn">⚠️ WARN</span></td></tr><tr><td>Answer Similarity</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:81%"></div></div><span class="bar-val score-pass">0.817</span></div></td><td>0.65</td><td>0.80</td><td><span class="badge badge-pass">✅ PASS</span></td></tr></tbody>
+    </table>
+    <p class="threshold-note">
+      Min Threshold = CI/CD gate (FAIL below this) |
+      Target = optimal production value (WARN between min and target)
+    </p>
+    
+            </div>
+            <div class="card">
+              <h3>Per-Role Radar Chart</h3>
+              <div class="chart-container">
+                <canvas id="radarChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Per-Role Score Breakdown</h3>
+            
+    <table>
+      <thead><tr><th>Role</th><th>Answer Relevancy</th><th>Context Recall</th><th>Context Precision</th><th>Faithfulness Token</th><th>Answer Similarity</th></tr></thead>
+      <tbody><tr><td><strong>Engineering</strong></td><td class='score-pass'>0.7942</td><td class='score-warn'>0.7023</td><td class='score-fail'>0.5730</td><td class='score-fail'>0.4783</td><td class='score-pass'>0.7802</td></tr><tr><td><strong>Finance</strong></td><td class='score-pass'>0.8564</td><td class='score-pass'>0.7850</td><td class='score-pass'>0.7129</td><td class='score-fail'>0.3800</td><td class='score-pass'>0.8374</td></tr><tr><td><strong>Hr</strong></td><td class='score-pass'>0.8430</td><td class='score-warn'>0.7184</td><td class='score-fail'>0.5274</td><td class='score-fail'>0.5915</td><td class='score-pass'>0.8092</td></tr><tr><td><strong>Marketing</strong></td><td class='score-fail'>nan</td><td class='score-fail'>nan</td><td class='score-fail'>0.5986</td><td class='score-pass'>0.8936</td><td class='score-fail'>nan</td></tr></tbody>
+    </table>
+    
+          </div>
+        </section>
+        
   
         <section>
           <h2>🔐 RBAC Authorization Security Tests</h2>
@@ -162,11 +200,11 @@ section { margin-bottom: 2rem; }
               <div class="stat-label">Tests Passed</div>
             </div>
             <div class="card stat-card">
-              <div class="stat-value score-warn">1</div>
+              <div class="stat-value score-warn">2</div>
               <div class="stat-label">Warnings</div>
             </div>
             <div class="card stat-card">
-              <div class="stat-value score-fail">1</div>
+              <div class="stat-value score-fail">0</div>
               <div class="stat-label">Tests Failed</div>
             </div>
           </div>
@@ -177,7 +215,7 @@ section { margin-bottom: 2rem; }
       <thead><tr>
         <th>Test</th><th>Security Score</th><th>Status</th><th>Details</th>
       </tr></thead>
-      <tbody><tr class="security-test-row"><td>test_unauthorized_access_blocked</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-fail" style="width:66%"></div></div><span class="bar-val score-fail">0.667</span></div></td><td><span class="badge badge-fail">❌ FAIL</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Checked 12 unauthorized role-query pairs. 4 leakage event(s) detected. Security score: 66.67%…</td></tr><tr class="security-test-row"><td>test_authorized_access_allowed</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Tested 4 authorized role-query pairs. 4/4 returned relevant content. Access score: 100.00%…</td></tr><tr class="security-test-row"><td>test_clevel_sees_all</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-warn" style="width:75%"></div></div><span class="bar-val score-warn">0.750</span></div></td><td><span class="badge badge-warn">⚠️ WARN</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>C-level retrieved docs from: ['engineering', 'finance', 'marketing']. Missing roles: ['hr']. Coverage: 75.00% of departm…</td></tr><tr class="security-test-row"><td>test_general_docs_accessible_to_all</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Tested 8 role-query pairs for general doc access. 8 returned at least one general-tagged document. Accessibility score: …</td></tr><tr class="security-test-row"><td>test_retriever_filter_correctness</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Checked 4 role-pair filter combinations. 0 filter violation(s) detected. Filter precision: 100.00%…</td></tr></tbody>
+      <tbody><tr class="security-test-row"><td>test_unauthorized_access_blocked</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-warn" style="width:91%"></div></div><span class="bar-val score-warn">0.917</span></div></td><td><span class="badge badge-warn">⚠️ WARN</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Checked 12 unauthorized role-query pairs. 1 leakage event(s) detected. Security score: 91.67%…</td></tr><tr class="security-test-row"><td>test_authorized_access_allowed</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Tested 4 authorized role-query pairs. 4/4 returned substantive relevant content. Access score: 100.00%…</td></tr><tr class="security-test-row"><td>test_clevel_sees_all</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-warn" style="width:75%"></div></div><span class="bar-val score-warn">0.750</span></div></td><td><span class="badge badge-warn">⚠️ WARN</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>C-level retrieved docs from: ['engineering', 'finance', 'marketing']. Missing roles: ['hr']. Coverage: 75.00% of departm…</td></tr><tr class="security-test-row"><td>test_general_docs_accessible_to_all</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Tested 8 role-query pairs for general doc access. 8 returned at least one general-tagged document. Accessibility score: …</td></tr><tr class="security-test-row"><td>test_retriever_filter_correctness</td><td><div class="progress-bar"><div class="bar-track"><div class="bar-fill bar-pass" style="width:100%"></div></div><span class="bar-val score-pass">1.000</span></div></td><td><span class="badge badge-pass">✅ PASS</span></td><td style='font-size:0.8rem;color:var(--text-dim)'>Checked 4 role-pair filter combinations. 0 filter violation(s) detected. Filter precision: 100.00%…</td></tr></tbody>
     </table>
     
           </div>
@@ -185,9 +223,33 @@ section { margin-bottom: 2rem; }
         
 
   <footer style="color:var(--text-dim);font-size:0.78rem;text-align:center;margin-top:3rem;">
-    Generated by FinSight RAGAS Evaluation Framework &nbsp;·&nbsp; 2026-07-12 13:14 UTC
+    Generated by FinSight RAGAS Evaluation Framework &nbsp;·&nbsp; 2026-08-08 21:23 UTC
   </footer>
 
   
+        <script>
+        (function() {
+          const ctx = document.getElementById('radarChart');
+          if (!ctx) return;
+          new Chart(ctx, {
+            type: 'radar',
+            data: {"labels": ["Faithfulness", "Answer Relevancy", "Context Precision", "Context Recall", "Answer Correctness"], "datasets": [{"label": "Engineering", "data": [0.0, 0.7942429780960083, 0.5730265593421205, 0.7022936741511027, 0.0], "backgroundColor": "rgba(99,102,241,0.2)", "borderColor": "rgba(99,102,241,0.7)", "borderWidth": 2, "pointBackgroundColor": "rgba(99,102,241,0.7)"}, {"label": "Finance", "data": [0.0, 0.8564083695411682, 0.7128828741954453, 0.7849981049696604, 0.0], "backgroundColor": "rgba(16,185,129,0.2)", "borderColor": "rgba(16,185,129,0.7)", "borderWidth": 2, "pointBackgroundColor": "rgba(16,185,129,0.7)"}, {"label": "Hr", "data": [0.0, 0.8429782092571259, 0.5274403248068046, 0.7184149871269861, 0.0], "backgroundColor": "rgba(245,158,11,0.2)", "borderColor": "rgba(245,158,11,0.7)", "borderWidth": 2, "pointBackgroundColor": "rgba(245,158,11,0.7)"}, {"label": "Marketing", "data": [0.0, NaN, 0.5985503825984833, NaN, 0.0], "backgroundColor": "rgba(239,68,68,0.2)", "borderColor": "rgba(239,68,68,0.7)", "borderWidth": 2, "pointBackgroundColor": "rgba(239,68,68,0.7)"}]},
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { labels: { color: '#94a3b8' } } },
+              scales: {
+                r: {
+                  min: 0, max: 1,
+                  ticks: { color: '#94a3b8', backdropColor: 'transparent', stepSize: 0.2 },
+                  grid: { color: 'rgba(148,163,184,0.2)' },
+                  pointLabels: { color: '#e2e8f0', font: { size: 11 } }
+                }
+              }
+            }
+          });
+        })();
+        </script>
+        
 </body>
 </html>

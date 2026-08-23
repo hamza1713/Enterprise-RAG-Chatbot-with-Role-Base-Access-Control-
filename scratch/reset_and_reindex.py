@@ -33,7 +33,7 @@ else:
 # 3. Now import and run the indexer
 print("Importing run_indexer...")
 sys.path.insert(0, '.')
-from app.rag_utils.rag_module import run_indexer
+from app.rag.module import run_indexer
 
 print("Running indexer...")
 try:

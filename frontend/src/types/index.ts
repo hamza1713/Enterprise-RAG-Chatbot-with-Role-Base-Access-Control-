@@ -62,8 +62,23 @@ export interface EvalStatusResponse {
   started_at?: string;
   completed_at?: string;
   overall?: RagasScores;
-  pass_fail?: Record<string, 'pass' | 'fail'>;
+  per_role?: Record<string, RagasScores>;
+  pass_fail?: Record<string, 'pass' | 'fail' | 'warn'>;
   rbac_overall?: string;
   report_available: boolean;
   error?: string;
+}
+
+export interface RagasEvalRecord {
+  user_input: string;
+  response: string;
+  retrieved_contexts: string | string[];
+  reference: string;
+  faithfulness?: number;
+  answer_relevancy?: number;
+  context_precision?: number;
+  context_recall?: number;
+  answer_correctness?: number;
+  role: string;
+  source?: string;
 }

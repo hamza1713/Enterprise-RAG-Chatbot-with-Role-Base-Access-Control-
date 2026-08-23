@@ -212,18 +212,29 @@ section { margin-bottom: 2rem; }
 """
 
 def _make_bar(score: float, css_class: str) -> str:
-    pct = int(score * 100)
+    import math
+    safe_score = 0.0 if (math.isnan(score) or math.isinf(score)) else score
+    pct = int(safe_score * 100)
     bar_cls = f"bar-{'pass' if css_class == 'score-pass' else 'warn' if css_class == 'score-warn' else 'fail'}"
+    display = f"{score:.3f}" if not math.isnan(score) else "N/A"
     return (
         f'<div class="progress-bar">'
         f'<div class="bar-track"><div class="bar-fill {bar_cls}" style="width:{pct}%"></div></div>'
-        f'<span class="bar-val {css_class}">{score:.3f}</span>'
+        f'<span class="bar-val {css_class}">{display}</span>'
         f'</div>'
     )
 
 
 def _overall_metrics_table(overall: dict, pass_fail: dict) -> str:
-    from app.rag_evaluator.ragas_evaluator import THRESHOLDS
+    try:
+        from app.rag_evaluator.ragas_evaluator import THRESHOLDS as _ragas_th
+    except Exception:
+        _ragas_th = {}
+    try:
+        from app.rag_evaluator.no_llm_evaluator import THRESHOLDS as _nollm_th
+    except Exception:
+        _nollm_th = {}
+    THRESHOLDS = {**_nollm_th, **_ragas_th}  # RAGAS thresholds override if name conflicts
 
     rows = ""
     for metric, score in overall.items():

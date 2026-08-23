@@ -542,3 +542,162 @@ class TestLiveEvaluation:
             f"C-level access score {result['score']:.2f} too low. "
             "Ensure vectorstore has documents for multiple roles."
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  UNIT TESTS — No-LLM Evaluator (fast, no API calls)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestNoLLMEvaluatorHelpers:
+    """Test the pure-Python metric helpers — zero network calls."""
+
+    def test_tokenize_basic(self):
+        from app.rag_evaluator.no_llm_evaluator import _tokenize
+        tokens = _tokenize("Hello World, this is a test!")
+        assert "hello" in tokens
+        assert "world" in tokens
+        assert "test" in tokens
+
+    def test_bm25_score_exact_match(self):
+        from app.rag_evaluator.no_llm_evaluator import _bm25_score, _tokenize
+        query = _tokenize("financial revenue growth")
+        doc   = _tokenize("the financial revenue growth was strong in 2024")
+        score = _bm25_score(query, doc)
+        assert score > 0, "BM25 should return positive score for matching tokens"
+
+    def test_bm25_score_no_match(self):
+        from app.rag_evaluator.no_llm_evaluator import _bm25_score, _tokenize
+        query = _tokenize("kubernetes microservices")
+        doc   = _tokenize("the employee handbook covers leave policies")
+        score = _bm25_score(query, doc)
+        assert score == 0.0, "BM25 should return 0 when no query tokens match"
+
+    def test_rouge_l_recall_perfect(self):
+        from app.rag_evaluator.no_llm_evaluator import _rouge_l_recall
+        reference = "the revenue grew by 25 percent"
+        hypothesis = "in 2024 the revenue grew by 25 percent for finsolve"
+        score = _rouge_l_recall(hypothesis, reference)
+        assert score >= 0.90, f"Perfect overlap should yield near-1.0, got {score}"
+
+    def test_rouge_l_recall_zero(self):
+        from app.rag_evaluator.no_llm_evaluator import _rouge_l_recall
+        reference  = "kubernetes deployment pipeline"
+        hypothesis = "the employee leave policy is 21 days annual"
+        score = _rouge_l_recall(hypothesis, reference)
+        assert score < 0.30, f"Unrelated text should have low ROUGE-L, got {score}"
+
+    def test_rouge_l_recall_empty_reference(self):
+        from app.rag_evaluator.no_llm_evaluator import _rouge_l_recall
+        score = _rouge_l_recall("some answer text", "")
+        assert score == 0.0, "Empty reference should return 0"
+
+    def test_cosine_identical(self):
+        from app.rag_evaluator.no_llm_evaluator import _cosine
+        import numpy as np
+        v = np.array([1.0, 2.0, 3.0])
+        assert _cosine(v, v) == pytest.approx(1.0, abs=1e-5)
+
+    def test_cosine_orthogonal(self):
+        from app.rag_evaluator.no_llm_evaluator import _cosine
+        import numpy as np
+        a = np.array([1.0, 0.0])
+        b = np.array([0.0, 1.0])
+        assert _cosine(a, b) == pytest.approx(0.0, abs=1e-5)
+
+    def test_cosine_zero_vector(self):
+        from app.rag_evaluator.no_llm_evaluator import _cosine
+        import numpy as np
+        a = np.zeros(3)
+        b = np.array([1.0, 2.0, 3.0])
+        assert _cosine(a, b) == 0.0, "Zero vector should return 0 cosine"
+
+    def test_apply_thresholds_pass(self):
+        from app.rag_evaluator.no_llm_evaluator import _apply_thresholds
+        scores = {
+            "context_recall":     0.80,
+            "answer_relevancy":   0.85,
+            "context_precision":  0.60,
+            "faithfulness_token": 0.60,
+            "answer_similarity":  0.85,
+        }
+        result = _apply_thresholds(scores)
+        assert all(v == "PASS" for v in result.values()), f"All should PASS: {result}"
+
+    def test_apply_thresholds_fail_low_recall(self):
+        from app.rag_evaluator.no_llm_evaluator import _apply_thresholds
+        result = _apply_thresholds({"context_recall": 0.30})
+        assert result["context_recall"] == "FAIL"
+
+    def test_apply_thresholds_warn(self):
+        from app.rag_evaluator.no_llm_evaluator import _apply_thresholds
+        result = _apply_thresholds({"answer_relevancy": 0.70})
+        assert result["answer_relevancy"] == "WARN"
+
+    def test_apply_thresholds_nan_is_fail(self):
+        from app.rag_evaluator.no_llm_evaluator import _apply_thresholds
+        import math
+        result = _apply_thresholds({"context_recall": float("nan")})
+        assert result["context_recall"] == "FAIL"
+
+    def test_score_sample_no_crash(self):
+        """score_sample should return a dict without crashing on mock data."""
+        from unittest.mock import patch, MagicMock
+        import numpy as np
+        from app.rag_evaluator.no_llm_evaluator import score_sample
+        fake_emb = np.random.rand(768).astype(np.float32)
+        with patch("app.rag_evaluator.no_llm_evaluator._embed_query", return_value=fake_emb), \
+             patch("app.rag_evaluator.no_llm_evaluator._embed_texts", return_value=np.array([fake_emb])):
+            result = score_sample(
+                question="What is the revenue?",
+                answer="Revenue was $9.4 billion in 2024.",
+                contexts=["FinSolve achieved $9.4 billion revenue in 2024."],
+                reference="FinSolve had strong revenue performance in 2024.",
+            )
+        assert "answer_relevancy"   in result
+        assert "context_recall"     in result
+        assert "context_precision"  in result
+        assert "faithfulness_token" in result
+        assert "answer_similarity"  in result
+        # All numeric values should be in [0, 1]
+        for k, v in result.items():
+            assert 0.0 <= v <= 1.0, f"{k}={v} out of [0,1]"
+
+
+@pytest.mark.slow
+class TestNoLLMEvaluationIntegration:
+    """
+    Integration test — runs the full no-LLM evaluation against the pre-built CSV.
+    Requires:
+    - app/rag_evaluator/evaluation_results_ragas_quick.csv (pre-built)
+    - Google embeddings reachable via GOOGLE_API_KEY
+
+    Run with: pytest tests/test_ragas_eval.py -v -m slow -k no_llm
+    """
+
+    def test_no_llm_evaluation_runs_and_scores(self):
+        """Full no-LLM evaluation should produce real scores (not NaN)."""
+        from app.rag_evaluator.no_llm_evaluator import run_no_llm_evaluation
+        results = run_no_llm_evaluation(sleep_between_samples=0.2)
+        assert "overall"   in results
+        assert "per_role"  in results
+        assert "pass_fail" in results
+        assert results["n_samples"] > 0
+
+        import math
+        # At least 3 out of 5 metrics must be non-NaN
+        non_nan = sum(1 for v in results["overall"].values() if not math.isnan(v))
+        assert non_nan >= 3, f"Expected at least 3 real scores, got: {results['overall']}"
+
+    def test_context_recall_above_zero(self):
+        """Context recall (embedding sim) should be > 0 for any real QA pair."""
+        from app.rag_evaluator.no_llm_evaluator import run_no_llm_evaluation
+        results = run_no_llm_evaluation(sleep_between_samples=0.2)
+        score = results["overall"].get("context_recall", 0.0)
+        assert score > 0.0, f"context_recall should be > 0, got {score}"
+
+    def test_answer_relevancy_above_zero(self):
+        """Answer relevancy (embedding sim) should be > 0 for any real QA pair."""
+        from app.rag_evaluator.no_llm_evaluator import run_no_llm_evaluation
+        results = run_no_llm_evaluation(sleep_between_samples=0.2)
+        score = results["overall"].get("answer_relevancy", 0.0)
+        assert score > 0.0, f"answer_relevancy should be > 0, got {score}"

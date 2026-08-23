@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 # ── Load .env early so every downstream import sees the variables ──────────────
 load_dotenv()
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 # ── Suppress noisy retry / deprecation warnings ────────────────────────────────
 warnings.filterwarnings("ignore", message=r"Retrying.*")
@@ -43,9 +44,15 @@ google_api_key:  str = (
     or os.getenv("OPENAI_API_KEY")
     or ""
 )
+# Normalize: ensure GOOGLE_API_KEY is set and GEMINI_API_KEY is removed so the
+# google-genai SDK doesn't emit "Both GOOGLE_API_KEY and GEMINI_API_KEY are set".
+if google_api_key:
+    os.environ["GOOGLE_API_KEY"] = google_api_key
+    os.environ.pop("GEMINI_API_KEY", None)   # remove to suppress duplicate-key warning
 openapi_key:    str = google_api_key          # backward-compat alias
 langchain_key:  str = os.getenv("LANGCHAIN_API_KEY") or ""
 cohere_api_key: str = os.getenv("COHERE_API_KEY")    or ""
+
 
 # ── JWT ────────────────────────────────────────────────────────────────────────
 JWT_SECRET_PATH: Path = BASE_DIR / "static" / "data" / "jwt_secret.key"
@@ -53,12 +60,19 @@ ALGORITHM:                 str = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES: int = 720   # 12 hours
 
 # ── Allowed CORS origins ───────────────────────────────────────────────────────
-CORS_ORIGINS: list[str] = [
-    "http://localhost:8501",
-    "http://127.0.0.1:8501",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+_cors_env = os.getenv("CORS_ORIGINS")
+if _cors_env:
+    CORS_ORIGINS: list[str] = [origin.strip() for origin in _cors_env.split(",") if origin.strip()]
+else:
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:8501",
+        "http://127.0.0.1:8501",
+    ]
+
 
 # ── Gemini model fallback list ─────────────────────────────────────────────────
 GEMINI_MODELS: list[str] = [
@@ -67,6 +81,7 @@ GEMINI_MODELS: list[str] = [
     "gemini-2.5-flash-preview",
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro-preview",
+    "gemini-1.5-flash",
 ]
 
 
