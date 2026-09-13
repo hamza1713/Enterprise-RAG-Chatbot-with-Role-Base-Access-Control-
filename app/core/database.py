@@ -64,6 +64,14 @@ def init_sqlite_schema() -> None:
             total_chunks     INTEGER DEFAULT 0,
             embedded_chunks  INTEGER DEFAULT 0
         );
+        CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
+            chunk_id UNINDEXED,
+            doc_id UNINDEXED,
+            role UNINDEXED,
+            source UNINDEXED,
+            content,
+            tokenize = 'porter unicode61'
+        );
     """)
     conn.commit()
 

@@ -209,6 +209,10 @@ export default function ChatPage() {
       let resolvedSources: string[] = [];
       let resolvedFallback = false;
       let localTokenCount = 0;
+      const recentHistory = messages
+        .filter((m) => m.content && !m.isStreaming)
+        .slice(-6)
+        .map((m) => ({ role: m.role, content: m.content }));
 
       await streamChat(
         q,
@@ -279,10 +283,11 @@ export default function ChatPage() {
           );
           setIsSending(false);
         },
-        controller.signal
+        controller.signal,
+        recentHistory
       );
     },
-    [isSending, token]
+    [isSending, token, messages]
   );
 
   /* ─── Stop streaming ──────────────────────────────────────────────── */

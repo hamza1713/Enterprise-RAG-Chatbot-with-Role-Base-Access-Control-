@@ -60,25 +60,79 @@ class MarkdownDocumentLoader(DocumentLoaderStrategy):
         )]
 
 
+def _format_table_as_markdown(table: list[list[str | None]]) -> str:
+    """Convert a 2D list of cells from pdfplumber into a clean GitHub Flavored Markdown table."""
+    if not table or not any(row for row in table):
+        return ""
+    cleaned_rows = []
+    for row in table:
+        cleaned_row = [re.sub(r"\s+", " ", str(cell or "").strip()) for cell in row]
+        if any(cleaned_row):
+            cleaned_rows.append(cleaned_row)
+    if not cleaned_rows:
+        return ""
+    num_cols = max(len(r) for r in cleaned_rows)
+    norm_rows = [r + [""] * (num_cols - len(r)) for r in cleaned_rows]
+    headers = [col or f"Col_{i+1}" for i, col in enumerate(norm_rows[0])]
+    separator = ["---"] * num_cols
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join(separator) + " |",
+    ]
+    for row in norm_rows[1:]:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
 class PDFDocumentLoader(DocumentLoaderStrategy):
     def load(self, filepath: str, role: str) -> list[Document]:
         name          = Path(filepath).name
         pages_content: list[str] = []
+        scanned_pages: list[int] = []
+        has_tables = False
         try:
             with pdfplumber.open(filepath) as pdf:
                 for idx, page in enumerate(pdf.pages):
-                    text = page.extract_text()
-                    if text and text.strip():
-                        pages_content.append(f"--- Page {idx + 1} ---\n{text}")
+                    page_num = idx + 1
+                    text = page.extract_text() or ""
+                    tables = page.extract_tables() or []
+
+                    formatted_tables = []
+                    for t in tables:
+                        md_table = _format_table_as_markdown(t)
+                        if md_table:
+                            formatted_tables.append(md_table)
+                            has_tables = True
+
+                    page_body = text.strip()
+                    if formatted_tables:
+                        tables_block = f"\n\n**Structured Tables (Page {page_num}):**\n" + "\n\n".join(formatted_tables)
+                        page_body = (page_body + "\n\n" + tables_block).strip() if page_body else tables_block
+
+                    if not page_body and getattr(page, 'images', None):
+                        scanned_pages.append(page_num)
+                        page_body = f"[Notice: Page {page_num} contains image content with no extractable text layer. Scanned PDF document.]"
+
+                    if page_body:
+                        pages_content.append(f"--- Page {page_num} ---\n{page_body}")
         except Exception as exc:
             print(f"[PDF Loader] Error parsing {name}: {exc}")
             raise
         if not pages_content:
             return []
         full_content = "\n\n".join(pages_content)
+        metadata = {
+            "role": role.lower(),
+            "source": name,
+            "filepath": filepath,
+            "has_tables": has_tables,
+            "has_scanned_pages": len(scanned_pages) > 0,
+        }
+        if scanned_pages:
+            metadata["scanned_pages"] = ",".join(str(p) for p in scanned_pages)
         return [Document(
             page_content=full_content,
-            metadata={"role": role.lower(), "source": name, "filepath": filepath},
+            metadata=metadata,
         )]
 
 

@@ -9,6 +9,7 @@ Handles:
 import asyncio
 import json
 import logging
+import re
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -24,8 +25,47 @@ logger = logging.getLogger("FinSight.chat")
 router = APIRouter(tags=["chat"])
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=8000)
+    history: list[ChatMessage] = Field(default_factory=list)
+
+
+def contextualize_query_llm(question: str, history: list[ChatMessage]) -> str:
+    """If conversation history exists, reformulate follow-up queries into a standalone question."""
+    if not history:
+        return question
+    turns = []
+    for m in history[-6:]:
+        c = m.content.strip()
+        if c:
+            turns.append(f"{m.role.capitalize()}: {c[:1000]}")
+    if not turns:
+        return question
+    chat_context = "\n".join(turns)
+    prompt = (
+        "Given the conversation history and a follow-up user question, "
+        "reformulate the follow-up question into a single, standalone search question. "
+        "Resolve ambiguous references (e.g. 'it', 'their', 'last quarter', 'that department'). "
+        "Do NOT answer the question. Return ONLY the standalone question.\n\n"
+        f"Conversation History:\n{chat_context}\n\n"
+        f"Follow-up Question: {question}\n\n"
+        "Standalone Question:"
+    )
+    try:
+        from app.rag.module import model
+        res = model.invoke(prompt)
+        text = res.content.strip() if hasattr(res, "content") else str(res).strip()
+        cleaned = re.sub(r'^(Standalone Question:|\"|\')', '', text, flags=re.IGNORECASE).strip().strip('"\'')
+        if cleaned and len(cleaned) >= 3:
+            return cleaned
+    except Exception as exc:
+        logger.warning(f"[QueryContextualizer] Skipped: {exc}")
+    return question
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -134,7 +174,13 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     username = user["username"]
     question = req.question
 
-    denial = check_cross_dept_access(question, role)
+    active_question = question
+    if req.history:
+        active_question = await asyncio.to_thread(contextualize_query_llm, question, req.history)
+        if active_question != question:
+            logger.info(f"[Chat] Contextualized query: '{question}' → '{active_question}'")
+
+    denial = check_cross_dept_access(active_question, role)
     if denial:
         return {
             "user": username, "role": role, "mode": "DENIED",
@@ -144,7 +190,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         }
 
     # ── Conversational / greeting short-circuit ─────────────────────────────
-    if is_conversational_query(question):
+    if is_conversational_query(active_question):
         greeting_answer = (
             "Hello! I'm **FinSight**, your enterprise AI assistant. "
             "I'm here to help you work smarter across your organization — whether that's "
@@ -159,13 +205,13 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "sources": [],
         }
 
-    mode          = await asyncio.to_thread(detect_query_type_llm, question)
+    mode          = await asyncio.to_thread(detect_query_type_llm, active_question)
     result:  dict = {}
     fallback_used = False
 
     if mode == "SQL":
         try:
-            result = await ask_csv(question, role, username, return_sql=True)
+            result = await ask_csv(active_question, role, username, return_sql=True)
             if result.get("error"):
                 if result.get("type") == "security":
                     return {
@@ -179,11 +225,11 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 raise ValueError("SQL returned empty result")
         except Exception as exc:
             logger.warning(f"[SQL Fallback] {exc}")
-            result        = await ask_rag(question, role)
+            result        = await ask_rag(active_question, role)
             fallback_used = True
             mode          = "SQL → fallback to RAG"
     else:
-        result = await ask_rag(question, role)
+        result = await ask_rag(active_question, role)
 
     return {
         "user":     username,
@@ -202,9 +248,15 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     username = user["username"]
     question = req.question
 
-    denial        = check_cross_dept_access(question, role)
-    is_greeting   = (not denial) and is_conversational_query(question)
-    mode          = "DENIED" if denial else ("GREETING" if is_greeting else await asyncio.to_thread(detect_query_type_llm, question))
+    active_question = question
+    if req.history:
+        active_question = await asyncio.to_thread(contextualize_query_llm, question, req.history)
+        if active_question != question:
+            logger.info(f"[ChatStream] Contextualized query: '{question}' → '{active_question}'")
+
+    denial        = check_cross_dept_access(active_question, role)
+    is_greeting   = (not denial) and is_conversational_query(active_question)
+    mode          = "DENIED" if denial else ("GREETING" if is_greeting else await asyncio.to_thread(detect_query_type_llm, active_question))
 
     async def event_generator():
         yield json.dumps({"type": "init", "user": username, "role": role, "mode": mode}) + "\n"
@@ -237,7 +289,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
 
         if mode == "SQL":
             try:
-                result = await ask_csv(question, role, username, return_sql=True)
+                result = await ask_csv(active_question, role, username, return_sql=True)
                 if result.get("error"):
                     if result.get("type") == "security":
                         msg = build_denial_message(result.get("answer", "Table not accessible."), role)
@@ -269,7 +321,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             sources: list[str] = []
             full_answer = ""
 
-            async for chunk in chain.astream({"input": question}):
+            async for chunk in chain.astream({"input": active_question}):
                 if "context" in chunk:
                     for doc in chunk["context"]:
                         src = doc.metadata.get("source")
@@ -290,6 +342,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             }) + "\n"
 
         except Exception as exc:
+            logger.exception(f"Chat streaming error: {exc}")
             s = str(exc).lower()
             if "429" in s or "resource exhausted" in s:
                 msg = "⚠️ **Rate Limited** — The AI service is temporarily rate-limited. Please try again in a moment."
@@ -298,7 +351,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             elif "404" in s:
                 msg = "⚠️ **Service Unavailable** — The AI model is temporarily offline. Please try again."
             else:
-                msg = f"⚠️ **Error** — {exc}"
+                msg = "⚠️ **Error** — An unexpected error occurred while processing your request. Please try again or contact your administrator."
             yield json.dumps({"type": "token",    "content": msg}) + "\n"
             yield json.dumps({"type": "metadata", "sources": [], "fallback": fallback_used}) + "\n"
 

@@ -322,19 +322,44 @@ _CHROMA_BATCH = 100
 
 
 def _embed_chunks_to_vectorstore(splits: list[Document], doc_id: int) -> None:
-    """Embed in batches of 100, updating SQLite chunk progress after each batch."""
+    """Embed in batches of 100, updating SQLite chunk progress and writing to FTS5 & Chroma."""
     total = len(splits)
+
+    # 1. Attach deterministic identifiers to each split
+    fts_rows = []
+    for idx, doc in enumerate(splits):
+        chunk_id = f"{doc_id}_{idx}"
+        doc.metadata["chunk_id"] = chunk_id
+        doc.metadata["doc_id"] = str(doc_id)
+        role = str(doc.metadata.get("role", "general")).lower()
+        source = str(doc.metadata.get("source", "unknown"))
+        fts_rows.append((chunk_id, str(doc_id), role, source, doc.page_content))
+
+    # 2. Synchronize SQLite metadata & FTS5 full-text table
     try:
         conn = get_db_conn()
         conn.execute(
             "UPDATE documents SET total_chunks=?, embedded_chunks=0 WHERE id=?",
             (total, doc_id),
         )
+        conn.execute("DELETE FROM document_chunks_fts WHERE doc_id = ?", (str(doc_id),))
+        conn.executemany(
+            "INSERT INTO document_chunks_fts (chunk_id, doc_id, role, source, content) VALUES (?, ?, ?, ?, ?)",
+            fts_rows,
+        )
         conn.commit()
         conn.close()
     except Exception as exc:
-        print(f"[Indexer] Warning: couldn't set total_chunks: {exc}")
+        print(f"[Indexer] Warning: couldn't sync FTS5 table: {exc}")
 
+    # 3. Clean any existing chunks for this document from Chroma vector store
+    with _vs_lock:
+        try:
+            vectorstore.delete(where={"doc_id": str(doc_id)})
+        except Exception:
+            pass
+
+    # 4. Write new batches to vectorstore
     done = 0
     for start in range(0, total, _CHROMA_BATCH):
         batch = splits[start: start + _CHROMA_BATCH]
@@ -453,6 +478,62 @@ class HybridMultiQueryRetriever(BaseRetriever):
             docs = vectorstore.similarity_search(query, **search_kwargs)
             return [(doc, 1.0) for doc in docs]
 
+    def _search_fts5(self, query: str, limit: int = 25) -> list[Document]:
+        """Search SQLite FTS5 index using BM25 with strict role scoping."""
+        tokens = re.findall(r"\w+", query)
+        valid_tokens = [t for t in tokens if len(t) >= 2]
+        if not valid_tokens:
+            return []
+        fts_expr = " OR ".join(f'"{t}"' for t in valid_tokens[:12])
+        role_lower = self.user_role.lower()
+        results: list[Document] = []
+        try:
+            conn = get_db_conn()
+            if role_lower == "c-level":
+                sql = """
+                    SELECT chunk_id, doc_id, role, source, content, bm25(document_chunks_fts) as rank
+                    FROM document_chunks_fts
+                    WHERE document_chunks_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """
+                rows = conn.execute(sql, (fts_expr, limit)).fetchall()
+            elif role_lower == "general":
+                sql = """
+                    SELECT chunk_id, doc_id, role, source, content, bm25(document_chunks_fts) as rank
+                    FROM document_chunks_fts
+                    WHERE document_chunks_fts MATCH ? AND LOWER(role) = 'general'
+                    ORDER BY rank
+                    LIMIT ?
+                """
+                rows = conn.execute(sql, (fts_expr, limit)).fetchall()
+            else:
+                sql = """
+                    SELECT chunk_id, doc_id, role, source, content, bm25(document_chunks_fts) as rank
+                    FROM document_chunks_fts
+                    WHERE document_chunks_fts MATCH ? AND (LOWER(role) = ? OR LOWER(role) = 'general')
+                    ORDER BY rank
+                    LIMIT ?
+                """
+                rows = conn.execute(sql, (fts_expr, role_lower, limit)).fetchall()
+            conn.close()
+
+            for r in rows:
+                results.append(Document(
+                    page_content=r[4],
+                    metadata={
+                        "chunk_id": r[0],
+                        "doc_id": r[1],
+                        "role": r[2],
+                        "source": r[3],
+                        "chunk_type": "text",
+                        "bm25_rank": float(r[5]),
+                    }
+                ))
+        except Exception:
+            pass
+        return results
+
     def _get_relevant_documents(
         self,
         query: str,
@@ -490,11 +571,35 @@ class HybridMultiQueryRetriever(BaseRetriever):
         content_docs = [d for d in all_docs if d.metadata.get("chunk_type") != "doc_summary"]
         summary_docs.sort(key=lambda d: d.metadata.get("relevance_score", 0), reverse=True)
         content_docs.sort(key=lambda d: d.metadata.get("relevance_score", 0), reverse=True)
-        candidates = (summary_docs + content_docs)[:30]
+        dense_candidates = (summary_docs + content_docs)[:30]
+
+        # 2. Sparse lexical BM25 search via SQLite FTS5
+        sparse_candidates = self._search_fts5(query, limit=25)
+
+        # 3. Reciprocal Rank Fusion (RRF: k=60)
+        rrf_scores: dict[int, float] = {}
+        doc_map: dict[int, Document] = {}
+
+        for rank, doc in enumerate(dense_candidates):
+            h = hash(doc.page_content)
+            doc_map[h] = doc
+            rrf_scores[h] = rrf_scores.get(h, 0.0) + (1.0 / (60.0 + rank + 1))
+
+        for rank, doc in enumerate(sparse_candidates):
+            h = hash(doc.page_content)
+            if h not in doc_map:
+                doc_map[h] = doc
+            rrf_scores[h] = rrf_scores.get(h, 0.0) + (1.0 / (60.0 + rank + 1))
+
+        candidates = sorted(
+            doc_map.values(),
+            key=lambda d: rrf_scores.get(hash(d.page_content), 0.0),
+            reverse=True,
+        )[:30]
 
         print(
-            f"[Retrieval] {len(candidates)} candidates "
-            f"({len(summary_docs)} summaries + {len(content_docs)} chunks)"
+            f"[Retrieval] Fused {len(candidates)} candidates "
+            f"({len(dense_candidates)} dense + {len(sparse_candidates)} sparse BM25)"
         )
 
         if not candidates:

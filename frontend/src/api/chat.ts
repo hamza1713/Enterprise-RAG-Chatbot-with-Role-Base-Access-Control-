@@ -19,7 +19,8 @@ export async function streamChat(
   onChunk: (chunk: ChatChunk) => void,
   onComplete: () => void,
   onError: (err: Error) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  history?: { role: string; content: string }[]
 ): Promise<void> {
   try {
     const response = await fetch(`${API_URL}/chat-stream`, {
@@ -29,7 +30,7 @@ export async function streamChat(
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, history: history || [] }),
     });
 
     if (!response.ok) {
