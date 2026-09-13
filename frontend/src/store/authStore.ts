@@ -22,9 +22,10 @@ export const useAuthStore = create<AuthState>()(
 
       login: async (username, password) => {
         // Prepare Basic Auth credentials
-        const authHeader = 'Basic ' + window.btoa(unescape(encodeURIComponent(`${username.trim()}:${password.trim()}`)));
+        const authHeader = 'Basic ' + window.btoa(unescape(encodeURIComponent(`${username.trim()}:${password}`)));
         
         const response = await axios.get(`${API_URL}/login`, {
+          timeout: 15000,
           headers: {
             Authorization: authHeader,
           },

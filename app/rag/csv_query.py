@@ -6,11 +6,13 @@ Updated to import from `app.core.config` instead of the old secret_key module.
 """
 
 import re
+import asyncio
 import sqlite3
 from pathlib import Path
 
 import duckdb
 import tabulate
+from app.core.sql_sandbox import query_authorized_tables
 from google import genai
 
 from app.core.config import (
@@ -33,8 +35,7 @@ def get_allowed_tables_for_role(role: str) -> list[str]:
     try:
         if role_lower == "c-level":
             tables   = [r[0] for r in d_conn.execute("SELECT table_name FROM tables_metadata").fetchall()]
-            physical = [r[0] for r in d_conn.execute("SHOW TABLES").fetchall()]
-            return list(set(tables + physical))
+            return tables
         elif role_lower == "general":
             return [r[0] for r in d_conn.execute(
                 "SELECT table_name FROM tables_metadata WHERE LOWER(role) = 'general'"
@@ -142,7 +143,7 @@ def get_filename_for_table(table_name: str) -> str:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-async def ask_csv(
+def _ask_csv_sync(
     question: str,
     role: str,
     username: str,
@@ -189,12 +190,9 @@ async def ask_csv(
                     "error": True, "type": "security",
                 }
 
-        d_conn = duckdb.connect(_DUCKDB_FILE, read_only=True)
-        try:
-            result  = d_conn.execute(sql).fetchall()
-            columns = [desc[0] for desc in d_conn.description]
-        finally:
-            d_conn.close()
+        result, columns, referenced_tables, truncated = query_authorized_tables(
+            _DUCKDB_FILE, sql, allowed_tables
+        )
 
         output     = [list(row) for row in result]
         total_rows = len(output)
@@ -202,7 +200,7 @@ async def ask_csv(
         if total_rows > 10:
             display_output = output[:10]
             note = (
-                f"\n\n*(Showing top 10 of {total_rows} rows. "
+                f"\n\n*(Showing top 10 of {'at least ' if truncated else ''}{total_rows} rows. "
                 f"To view the complete dataset, click the Reference drawer below "
                 f"or use the Document Explorer tab.)*"
             )
@@ -224,3 +222,7 @@ async def ask_csv(
 
     except Exception as exc:
         return {"answer": f"❌ Error: {exc}", "error": True, "type": "technical"}
+
+
+async def ask_csv(question: str, role: str, username: str, return_sql: bool = False) -> dict:
+    return await asyncio.to_thread(_ask_csv_sync, question, role, username, return_sql)

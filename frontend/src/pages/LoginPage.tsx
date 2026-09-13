@@ -1,229 +1,40 @@
-import React, { useState } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
+import { Navigate } from 'react-router-dom';
+import axios from 'axios';
+import { ArrowRight, Layers, ShieldCheck, FileText, ChartNoAxesCombined, Eye, EyeOff } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 
 export default function LoginPage() {
-  const [usernameInput, setUsernameInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
+  const { login, isAuthenticated } = useAuthStore();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const login = useAuthStore((state) => state.login);
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const navigate = useNavigate();
-
-  // Already logged in — skip login page entirely
-  if (isAuthenticated) {
-    return <Navigate to="/chat" replace />;
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!usernameInput.trim() || !passwordInput.trim()) {
-      setErrorMsg('Please enter both username and password.');
-      return;
-    }
-
-    setLoading(true);
-    setErrorMsg(null);
-
-    try {
-      await login(usernameInput, passwordInput);
-      navigate('/chat');
-    } catch (err: any) {
-      console.error('Login failed', err);
-      if (err.response && err.response.status === 401) {
-        setErrorMsg('Invalid username or password.');
-      } else if (err.code === 'ERR_NETWORK') {
-        setErrorMsg('🔌 Connection failed. Backend server is offline.');
-      } else {
-        setErrorMsg(err.response?.data?.detail || 'Unexpected error occurred. Please try again.');
-      }
-    } finally {
-      setLoading(false);
-    }
+  const [error, setError] = useState('');
+  if (isAuthenticated) return <Navigate to="/chat" replace />;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (loading) return;
+    setLoading(true); setError('');
+    try { await login(username.trim(), password); }
+    catch (err) {
+      setError(axios.isAxiosError(err) && err.response?.status === 401 ? 'The username or password is incorrect. Please try again.' : 'We couldn’t connect to your workspace. Please try again shortly.');
+    } finally { setLoading(false); }
   };
-
-  return (
-    <div style={containerStyle}>
-      {/* Glow blobs for premium aesthetics */}
-      <div style={glowBlob1Style} />
-      <div style={glowBlob2Style} />
-
-      <div className="fs-card" style={loginCardStyle}>
-        {/* Brand Header */}
-        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
-          <div style={logoContainerStyle}>
-            <div style={logoIconStyle}>📊</div>
-            <span style={logoTextStyle}>
-              Fin<span style={{ color: 'var(--primary-hover)' }}>Sight</span>
-            </span>
-          </div>
-          <p style={subtitleStyle}>Role-Based AI Workspace</p>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} style={formStyle}>
-          {errorMsg && (
-            <div style={errorBannerStyle}>
-              {errorMsg}
-            </div>
-          )}
-
-          <div style={inputGroupStyle}>
-            <label style={labelStyle}>Username</label>
-            <input
-              type="text"
-              className="fs-input"
-              placeholder="Enter your username"
-              value={usernameInput}
-              onChange={(e) => setUsernameInput(e.target.value)}
-              disabled={loading}
-              required
-            />
-          </div>
-
-          <div style={inputGroupStyle}>
-            <label style={labelStyle}>Password</label>
-            <input
-              type="password"
-              className="fs-input"
-              placeholder="Enter your password"
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              disabled={loading}
-              required
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="fs-btn fs-btn-primary"
-            style={{ width: '100%', marginTop: '10px' }}
-            disabled={loading}
-          >
-            {loading ? 'Signing In...' : 'Sign In →'}
-          </button>
-        </form>
-
-        <div style={footerStyle}>
-          🔒 Secured with JWT Authentication
-        </div>
-      </div>
-    </div>
-  );
+  return <div className="login-page">
+    <section className="login-story" aria-label="About FinSight">
+      <div className="brand"><span className="brand-mark"><Layers size={24} /></span>FinSight<span className="brand-period">.</span></div>
+      <div className="login-story-content"><span className="eyebrow">YOUR INTELLIGENCE WORKSPACE</span><h1>Your knowledge.<br />A clearer perspective.</h1><p>Connect the dots across your documents and data. Turn everyday questions into informed decisions.</p>
+        <div className="login-capabilities"><div><FileText size={20} /><span><strong>Ask your documents</strong><small>Find answers with source references.</small></span></div><div><ChartNoAxesCombined size={20} /><span><strong>Understand your data</strong><small>Explore structured data in plain English.</small></span></div><div><ShieldCheck size={20} /><span><strong>A workspace for every role</strong><small>Department-specific access to knowledge.</small></span></div></div>
+      </div><div className="login-story-footer">FINSIGHT <span>Clarity starts with a question.</span></div>
+    </section>
+    <section className="login-form-panel"><div className="login-form-wrap"><span className="eyebrow">WELCOME BACK</span><h2>Sign in to your workspace</h2><p className="login-intro">Your next insight is one question away.</p>
+      <form onSubmit={submit}>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        <label htmlFor="username">Username</label><input id="username" name="username" className="fs-input" autoComplete="username" placeholder="Your work username" value={username} onChange={e => setUsername(e.target.value)} required disabled={loading} />
+        <label htmlFor="password">Password</label><div className="password-field"><input id="password" name="password" className="fs-input" type={visible ? 'text' : 'password'} autoComplete="current-password" placeholder="Enter your password" value={password} onChange={e => setPassword(e.target.value)} required disabled={loading} /><button className="icon-button" type="button" aria-label={visible ? 'Hide password' : 'Show password'} aria-pressed={visible} onClick={() => setVisible(!visible)}>{visible ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+        <button className="fs-btn fs-btn-primary login-submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}<ArrowRight size={17} /></button>
+      </form><p className="login-help">Need access or help signing in?<br />Contact your workspace administrator.</p><div className="login-security"><ShieldCheck size={15} />Access is managed by your organization</div>
+    </div><footer className="login-footer">FinSight · AI-powered knowledge workspace</footer></section>
+  </div>;
 }
-
-// Custom inline CSS to guarantee beautiful layout without Tailwind issues
-const containerStyle: React.CSSProperties = {
-  minHeight: '100vh',
-  width: '100vw',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'radial-gradient(circle at center, #0f1235 0%, #050716 100%)',
-  position: 'relative',
-  overflow: 'hidden',
-  padding: '20px',
-};
-
-const glowBlob1Style: React.CSSProperties = {
-  position: 'absolute',
-  top: '20%',
-  left: '25%',
-  width: '350px',
-  height: '350px',
-  background: 'rgba(99, 102, 241, 0.12)',
-  borderRadius: '50%',
-  filter: 'blur(80px)',
-  zIndex: 0,
-};
-
-const glowBlob2Style: React.CSSProperties = {
-  position: 'absolute',
-  bottom: '20%',
-  right: '25%',
-  width: '350px',
-  height: '350px',
-  background: 'rgba(139, 92, 246, 0.12)',
-  borderRadius: '50%',
-  filter: 'blur(80px)',
-  zIndex: 0,
-};
-
-const loginCardStyle: React.CSSProperties = {
-  width: '100%',
-  maxWidth: '420px',
-  position: 'relative',
-  zIndex: 1,
-  padding: '40px 32px',
-};
-
-const logoContainerStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '12px',
-  marginBottom: '6px',
-};
-
-const logoIconStyle: React.CSSProperties = {
-  width: '46px',
-  height: '46px',
-  borderRadius: '14px',
-  background: 'linear-gradient(135deg, var(--primary), var(--secondary))',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontSize: '22px',
-  boxShadow: '0 4px 18px rgba(99, 102, 241, 0.35)',
-};
-
-const logoTextStyle: React.CSSProperties = {
-  fontSize: '26px',
-  fontWeight: 800,
-  letterSpacing: '-0.03em',
-  color: '#ffffff',
-};
-
-const subtitleStyle: React.CSSProperties = {
-  fontSize: '12.5px',
-  color: 'var(--text-muted)',
-  fontStyle: 'italic',
-};
-
-const formStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '20px',
-};
-
-const errorBannerStyle: React.CSSProperties = {
-  background: 'rgba(239, 68, 68, 0.15)',
-  border: '1px solid rgba(239, 68, 68, 0.3)',
-  color: '#FCA5A5',
-  padding: '12px',
-  borderRadius: 'var(--radius-sm)',
-  fontSize: '13px',
-  lineHeight: 1.5,
-  textAlign: 'center',
-};
-
-const inputGroupStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '6px',
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: '11.5px',
-  fontWeight: 700,
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-  color: 'var(--text-secondary)',
-};
-
-const footerStyle: React.CSSProperties = {
-  textAlign: 'center',
-  marginTop: '24px',
-  fontSize: '11px',
-  color: 'var(--text-muted)',
-};

@@ -16,12 +16,13 @@ All business logic has been moved to:
 
 import asyncio
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.core.config import CORS_ORIGINS
+from app.core.config import CORS_ORIGINS, APP_ENV
 from app.core.database import init_sqlite_schema, init_duckdb_schema, heal_stale_filepaths, reconcile_duckdb_from_sqlite, preload_default_data
 from app.core.users import seed_default_users
 
@@ -59,8 +60,9 @@ async def lifespan(app_instance: FastAPI):
     reconcile_duckdb_from_sqlite()
 
     # Preload documents from resources/data/ in the background
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, preload_default_data)
+    if os.getenv('PRELOAD_SAMPLE_DATA', 'false' if APP_ENV == 'production' else 'true').lower() == 'true':
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, preload_default_data)
 
     logger.info("[Startup] FinSight is ready.")
     yield

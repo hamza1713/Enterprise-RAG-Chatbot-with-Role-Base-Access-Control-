@@ -687,7 +687,8 @@ def run_all_security_tests(
     }
 
     # ── Save ───────────────────────────────────────────────────────────────────
-    out_path = Path(__file__).parent / output_json
+    from app.core.config import EVAL_OUTPUT_DIR
+    out_path = EVAL_OUTPUT_DIR / output_json
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
     logger.info(f"[RBAC] Security report saved to {out_path}")

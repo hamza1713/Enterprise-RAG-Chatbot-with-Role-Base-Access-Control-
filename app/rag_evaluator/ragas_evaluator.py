@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+from app.core.config import EVAL_OUTPUT_DIR
 
 # ── Path setup ─────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -175,7 +176,7 @@ def run_ragas_evaluation(
     df     = result.to_pandas()
 
     # ── Save to CSV ────────────────────────────────────────────────────────────
-    out_path = Path(__file__).parent / output_csv
+    out_path = EVAL_OUTPUT_DIR / output_csv
     # Re-attach role column if present in original dataset
     if "role" in dataset.column_names and "role" not in df.columns:
         df["role"] = dataset["role"]

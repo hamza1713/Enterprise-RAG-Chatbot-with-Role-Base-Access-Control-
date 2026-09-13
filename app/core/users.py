@@ -8,7 +8,8 @@ import logging
 import os
 
 from .database import get_db_conn
-from .security import hash_password, verify_password
+from .security import hash_password
+from .config import APP_ENV
 
 logger = logging.getLogger("FinSight.users")
 
@@ -27,9 +28,8 @@ _DEFAULT_ROLES: list[str] = ["C-Level", "Marketing", "HR", "Finance", "Engineeri
 def seed_default_users() -> None:
     """
     Insert default roles and users if they don't exist yet.
-    If a user already exists with the correct password hash, it is left
-    unchanged.  If the hash is wrong (e.g. after a password env-var change),
-    the hash is updated.
+    Existing account passwords are never overwritten on application startup.
+    Production seeds only an explicitly configured administrator account.
     """
     conn = get_db_conn()
     c    = conn.cursor()
@@ -38,17 +38,19 @@ def seed_default_users() -> None:
         c.execute("INSERT OR IGNORE INTO roles (role_name) VALUES (?)", (role_name,))
 
     for username, plain_pw, role in _DEFAULT_USERS:
+        if APP_ENV == 'production' and username != 'admin':
+            continue
         c.execute("SELECT password FROM users WHERE username = ?", (username,))
         row = c.fetchone()
         if not row:
+            if APP_ENV == 'production':
+                plain_pw = os.getenv('ADMIN_PASSWORD', '')
+                if len(plain_pw) < 14 or plain_pw == 'admin123':
+                    conn.close()
+                    raise RuntimeError('Initial production setup requires an ADMIN_PASSWORD of at least 14 characters.')
             c.execute(
                 "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
                 (username, hash_password(plain_pw), role),
-            )
-        elif not verify_password(plain_pw, row[0]):
-            c.execute(
-                "UPDATE users SET password=? WHERE username=?",
-                (hash_password(plain_pw), username),
             )
 
     conn.commit()

@@ -32,7 +32,14 @@ def get_current_user(
         role     = payload.get("role")
         if not username or not role:
             raise HTTPException(status_code=401, detail="Invalid authentication token payload.")
-        return {"username": username, "role": role}
+        conn = get_db_conn()
+        try:
+            row = conn.execute("SELECT role FROM users WHERE username=?", (username,)).fetchone()
+        finally:
+            conn.close()
+        if not row or row[0].lower() != role.lower():
+            raise HTTPException(status_code=401, detail="Account access has changed. Please sign in again.")
+        return {"username": username, "role": row[0]}
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired authentication token.")
 
@@ -40,7 +47,7 @@ def get_current_user(
 # ── Dependency: HTTP Basic auth (login endpoint only) ─────────────────────────
 def _authenticate_basic(credentials: HTTPBasicCredentials = Depends(_basic)) -> dict:
     username = credentials.username.strip()
-    password = credentials.password.strip()
+    password = credentials.password
 
     conn = get_db_conn()
     row  = conn.execute(

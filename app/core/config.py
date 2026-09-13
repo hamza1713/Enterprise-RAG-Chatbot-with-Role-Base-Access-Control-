@@ -34,14 +34,16 @@ DB_PATH:     Path = BASE_DIR / DB_NAME
 DUCKDB_DIR:  Path = BASE_DIR / "static" / "data"
 DUCKDB_PATH: Path = DUCKDB_DIR / DUCKDB_NAME
 
-UPLOAD_DIR:  Path = BASE_DIR / "static" / "uploads"
+UPLOAD_DIR:  Path = Path(os.getenv("UPLOAD_DIR", str(BASE_DIR / "static" / "uploads")))
 RESOURCES_DIR: Path = BASE_DIR / "resources" / "data"
+CHROMA_DIR: Path = Path(os.getenv("CHROMA_DIR", str(BASE_DIR / "chroma_db")))
+EVAL_OUTPUT_DIR: Path = Path(os.getenv("EVAL_OUTPUT_DIR", str(BASE_DIR / "app" / "rag_evaluator")))
+EVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── API keys ───────────────────────────────────────────────────────────────────
 google_api_key:  str = (
     os.getenv("GOOGLE_API_KEY")
     or os.getenv("GEMINI_API_KEY")
-    or os.getenv("OPENAI_API_KEY")
     or ""
 )
 # Normalize: ensure GOOGLE_API_KEY is set and GEMINI_API_KEY is removed so the
@@ -58,6 +60,12 @@ cohere_api_key: str = os.getenv("COHERE_API_KEY")    or ""
 JWT_SECRET_PATH: Path = BASE_DIR / "static" / "data" / "jwt_secret.key"
 ALGORITHM:                 str = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES: int = 720   # 12 hours
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+if APP_ENV == "production":
+    if len(os.getenv("JWT_SECRET", "")) < 32:
+        raise RuntimeError("Production requires a JWT_SECRET of at least 32 characters.")
+    if not os.getenv("CORS_ORIGINS"):
+        raise RuntimeError("Production requires explicit CORS_ORIGINS.")
 
 # ── Allowed CORS origins ───────────────────────────────────────────────────────
 _cors_env = os.getenv("CORS_ORIGINS")

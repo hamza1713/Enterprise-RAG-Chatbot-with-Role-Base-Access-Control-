@@ -1,16 +1,16 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import AppLayout from './components/layout/AppLayout';
 
 // Pages
 import LoginPage from './pages/LoginPage';
-import ChatPage from './pages/ChatPage';
-import ExplorerPage from './pages/ExplorerPage';
-import UploadPage from './pages/UploadPage';
-import KbIndexingPage from './pages/KbIndexingPage';
-import AdminPage from './pages/AdminPage';
-import EvaluationPage from './pages/EvaluationPage';
+const ChatPage = lazy(() => import('./pages/ChatPage'));
+const ExplorerPage = lazy(() => import('./pages/ExplorerPage'));
+const UploadPage = lazy(() => import('./pages/UploadPage'));
+const KbIndexingPage = lazy(() => import('./pages/KbIndexingPage'));
+const AdminPage = lazy(() => import('./pages/AdminPage'));
+const EvaluationPage = lazy(() => import('./pages/EvaluationPage'));
 
 // Auth Guard component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -33,6 +33,7 @@ function CLevelRoute({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <BrowserRouter>
+      <Suspense fallback={<div className="fs-empty-state" role="status">Opening your workspace…</div>}>
       <Routes>
         {/* Public Login Route */}
         <Route path="/login" element={<LoginPage />} />
@@ -107,6 +108,7 @@ export default function App() {
         {/* Catch-all: send to login — ProtectedRoute forwards authed users onward */}
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

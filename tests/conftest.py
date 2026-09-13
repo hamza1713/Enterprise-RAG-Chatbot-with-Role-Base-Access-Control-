@@ -1,33 +1,27 @@
-import pytest
+"""Keep every test store separate from developer documents and indexes."""
 import os
+import tempfile
 from pathlib import Path
+import pytest
 
-import os
-os.environ["DB_NAME"] = "test_roles_docs.db"
-os.environ["DUCKDB_NAME"] = "test_structured_queries.duckdb"
+TEST_ROOT = Path(tempfile.mkdtemp(prefix='finsight-tests-'))
+os.environ.update({
+    'APP_ENV': 'development',
+    'DB_NAME': str(TEST_ROOT / 'roles.db'),
+    'DUCKDB_NAME': str(TEST_ROOT / 'tables.duckdb'),
+    'UPLOAD_DIR': str(TEST_ROOT / 'uploads'),
+    'CHROMA_DIR': str(TEST_ROOT / 'chroma'),
+    'EVAL_OUTPUT_DIR': str(TEST_ROOT / 'evaluation'),
+    'JWT_SECRET': 'offline-test-signing-secret-at-least-32-characters',
+    'GOOGLE_API_KEY': 'offline-test-key',
+    'COHERE_API_KEY': '',
+    'LANGCHAIN_API_KEY': '',
+})
 
-# Clean databases at startup before any imports hold file locks
-db_file = Path("test_roles_docs.db")
-if db_file.exists():
-    try:
-        db_file.unlink()
-        print("[OK] Deleted test_roles_docs.db for clean test run.")
-    except Exception as e:
-        print("Failed to delete test_roles_docs.db:", e)
-        
-duckdb_file = Path("static/data/test_structured_queries.duckdb")
-if duckdb_file.exists():
-    try:
-        duckdb_file.unlink()
-        print("[OK] Deleted test_structured_queries.duckdb for clean test run.")
-    except Exception as e:
-        print("Failed to delete DuckDB file:", e)
-
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope='session', autouse=True)
 def init_test_db():
     from app.core.database import init_sqlite_schema, init_duckdb_schema
     from app.core.users import seed_default_users
     init_sqlite_schema()
     init_duckdb_schema()
     seed_default_users()
-

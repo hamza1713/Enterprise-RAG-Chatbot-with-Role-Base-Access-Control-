@@ -17,8 +17,11 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import DUCKDB_PATH, UPLOAD_DIR
 from app.core.database import get_db_conn
-from app.rag.module import run_indexer
+def run_indexer():
+    from app.rag.module import run_indexer as index
+    return index()
 from .auth import get_current_user
+from .admin import _require_clevel
 
 logger = logging.getLogger("FinSight.documents")
 router = APIRouter(tags=["documents"])
@@ -29,36 +32,61 @@ async def upload_docs(
     background_tasks: BackgroundTasks,
     file:  UploadFile = File(...),
     role:  str        = Form(...),
-    user:  dict       = Depends(get_current_user),
+    user:  dict       = Depends(_require_clevel),
 ):
     """
     Upload a document (.md, .csv, .pdf), register it in SQLite,
     load CSV files into DuckDB, and kick off background indexing.
     """
     try:
-        filename  = file.filename
+        filename = file.filename or ""
+        if not filename or any(c in filename for c in ('/', '\\', ':', '\x00')) or filename in {'.', '..'}:
+            raise HTTPException(status_code=400, detail="Invalid filename.")
+        conn = get_db_conn()
+        try:
+            role_row = conn.execute("SELECT role_name FROM roles WHERE LOWER(role_name)=LOWER(?)", (role.strip(),)).fetchone()
+        finally:
+            conn.close()
+        if not role_row:
+            raise HTTPException(status_code=400, detail="Select an existing access role.")
+        role = role_row[0]
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", role):
+            raise HTTPException(status_code=400, detail="Role cannot be used as an upload directory.")
         extension = Path(filename).suffix.lower()
 
         if extension not in {".csv", ".md", ".pdf"}:
             raise HTTPException(status_code=400, detail="Unsupported file type. Use .csv, .md, or .pdf")
 
-        role_dir  = UPLOAD_DIR / role
+        base_upload_dir = Path(os.getenv("UPLOAD_DIR", str(UPLOAD_DIR)))
+        role_dir  = base_upload_dir / role
         role_dir.mkdir(parents=True, exist_ok=True)
-        filepath  = role_dir / filename
+        filepath = (role_dir / filename).resolve()
+        if not filepath.is_relative_to(base_upload_dir.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid upload path.")
+        if filepath.exists():
+            raise HTTPException(status_code=409, detail="A file with this name already exists for this role. Rename the file before uploading.")
 
-        data = await file.read()
-        filepath.write_bytes(data)
+        data = await file.read(20 * 1024 * 1024 + 1)
+        if len(data) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Files must be 20 MB or smaller.")
+        if not data:
+            raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+        if extension == '.pdf' and not data.startswith(b'%PDF-'):
+            raise HTTPException(status_code=400, detail="The file is not a valid PDF.")
 
         headers_str: str | None = None
         if extension == ".csv":
             df          = pd.read_csv(BytesIO(data))
             tname       = re.sub(r"[^a-zA-Z0-9_]", "_", filepath.stem)
+            if not tname or not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", tname):
+                raise HTTPException(status_code=400, detail="CSV filenames must start with a letter or underscore.")
             headers_str = ",".join(str(h) for h in df.columns.tolist())
             dc = duckdb.connect(str(DUCKDB_PATH))
             try:
-                dc.execute("DELETE FROM tables_metadata WHERE table_name=?", (tname,))
+                if dc.execute("SELECT 1 FROM information_schema.tables WHERE LOWER(table_name)=LOWER(?)", (tname,)).fetchone():
+                    raise HTTPException(status_code=409, detail="A dataset with this name already exists. Use a unique CSV filename.")
                 dc.register("df_tmp", df)
-                dc.execute(f"CREATE OR REPLACE TABLE {tname} AS SELECT * FROM df_tmp")
+                dc.execute(f'CREATE TABLE "{tname}" AS SELECT * FROM df_tmp')
                 dc.execute(
                     "INSERT INTO tables_metadata (table_name, role) VALUES (?,?)",
                     (tname, role),
@@ -67,6 +95,8 @@ async def upload_docs(
             finally:
                 dc.close()
 
+        with filepath.open('xb') as destination:
+            destination.write(data)
         conn = get_db_conn()
         conn.execute(
             "INSERT INTO documents "
@@ -87,50 +117,14 @@ async def upload_docs(
         raise
     except Exception as exc:
         logger.error(f"[UPLOAD] Failed: {exc}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {exc}")
-
-
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import Query
-
-_bearer = HTTPBearer(auto_error=False)
+        raise HTTPException(status_code=500, detail="Upload could not be completed. Please contact your administrator.")
 
 
 @router.get("/preview-pdf")
-def preview_pdf(
-    filepath: str,
-    token: str | None = Query(None),
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer)
-):
-    """
-    Securely preview a PDF file. Verifies the user has role-based access
-    to the document, and returns the file response.
-    Supports authenticating via query parameter `token` or bearer header.
-    """
+def preview_pdf(filepath: str, user: dict = Depends(get_current_user)):
+    """Return only registered, authorized PDF documents using header authentication."""
     from fastapi.responses import FileResponse
-    from pathlib import Path
-    from app.core.security import decode_access_token
     import sqlite3
-    
-    # Resolve token from header or query param
-    resolved_token = None
-    if creds:
-        resolved_token = creds.credentials
-    elif token:
-        resolved_token = token
-        
-    if not resolved_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-        
-    try:
-        payload  = decode_access_token(resolved_token)
-        username = payload.get("sub")
-        role     = payload.get("role")
-        if not username or not role:
-            raise HTTPException(status_code=401, detail="Invalid token payload.")
-        user = {"username": username, "role": role}
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token.")
 
     clean_path = str(Path(filepath).resolve())
     
@@ -142,36 +136,27 @@ def preview_pdf(
     
     user_role = user["role"].lower()
     if user_role == "c-level":
-        c.execute("SELECT 1 FROM documents WHERE filepath=?", (clean_path,))
+        c.execute("SELECT 1 FROM documents WHERE filepath IN (?,?)", (clean_path, filepath))
     elif user_role == "general":
-        c.execute("SELECT 1 FROM documents WHERE filepath=? AND LOWER(role)='general'", (clean_path,))
+        c.execute("SELECT 1 FROM documents WHERE filepath IN (?,?) AND LOWER(role)='general'", (clean_path, filepath))
     else:
         c.execute(
-            "SELECT 1 FROM documents WHERE filepath=? AND (LOWER(role)=? OR LOWER(role)='general')",
-            (clean_path, user_role)
+            "SELECT 1 FROM documents WHERE filepath IN (?,?) AND (LOWER(role)=? OR LOWER(role)='general')",
+            (clean_path, filepath, user_role)
         )
     
     allowed = c.fetchone()
     conn.close()
     
     if not allowed:
-        # Fallback security check: is it in UPLOAD_DIR or RESOURCES_DIR?
-        from app.core.config import UPLOAD_DIR, RESOURCES_DIR
-        try:
-            p = Path(clean_path)
-            is_under_uploads = p.is_relative_to(UPLOAD_DIR)
-            is_under_resources = p.is_relative_to(RESOURCES_DIR)
-        except AttributeError:
-            is_under_uploads = str(clean_path).startswith(str(UPLOAD_DIR))
-            is_under_resources = str(clean_path).startswith(str(RESOURCES_DIR))
-            
-        if not (is_under_uploads or is_under_resources):
-            raise HTTPException(status_code=403, detail="Access denied to this file path.")
+        raise HTTPException(status_code=403, detail="Access denied to this file path.")
+    if Path(clean_path).suffix.lower() != '.pdf':
+        raise HTTPException(status_code=400, detail="Only PDF files can be opened here.")
             
     if not os.path.exists(clean_path):
         raise HTTPException(status_code=404, detail="PDF file not found.")
         
-    return FileResponse(clean_path, media_type="application/pdf")
+    return FileResponse(clean_path, media_type="application/pdf", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/documents")
@@ -202,13 +187,13 @@ def get_document_content(filepath: str, user: dict = Depends(get_current_user)):
     conn = get_db_conn()
     c = conn.cursor()
     if user_role == "c-level":
-        c.execute("SELECT 1 FROM documents WHERE filepath=?", (clean_path,))
+        c.execute("SELECT 1 FROM documents WHERE filepath IN (?,?)", (clean_path, filepath))
     elif user_role == "general":
-        c.execute("SELECT 1 FROM documents WHERE filepath=? AND LOWER(role)='general'", (clean_path,))
+        c.execute("SELECT 1 FROM documents WHERE filepath IN (?,?) AND LOWER(role)='general'", (clean_path, filepath))
     else:
         c.execute(
-            "SELECT 1 FROM documents WHERE filepath=? AND (LOWER(role)=? OR LOWER(role)='general')",
-            (clean_path, user_role)
+            "SELECT 1 FROM documents WHERE filepath IN (?,?) AND (LOWER(role)=? OR LOWER(role)='general')",
+            (clean_path, filepath, user_role)
         )
     allowed = c.fetchone()
     conn.close()
@@ -257,8 +242,11 @@ def get_document_content(filepath: str, user: dict = Depends(get_current_user)):
             return {"type": "markdown", "content": content}
         else:
             raise HTTPException(status_code=400, detail="Previewing this file type is not supported.")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to read document")
+        raise HTTPException(status_code=500, detail="The document could not be read.")
 
 
 @router.get("/system-metrics")
@@ -281,4 +269,3 @@ def get_system_metrics(user: dict = Depends(get_current_user)):
     except Exception as exc:
         logger.warning(f"Failed to fetch system metrics: {exc}")
     return metrics
-

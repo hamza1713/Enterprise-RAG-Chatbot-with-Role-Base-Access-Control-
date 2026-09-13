@@ -34,6 +34,7 @@ venv.bak/
 
 # Unit test / coverage / test reports
 .pytest_cache/
+.pytest_temp/
 .coverage
 .coverage.*
 .cache
@@ -68,6 +69,7 @@ static/data/jwt_secret.key
 # Environment Variables & Secrets
 .env
 .env.local
+deploy/production.env
 .env.*.local
 frontend/.env
 frontend/.env.local

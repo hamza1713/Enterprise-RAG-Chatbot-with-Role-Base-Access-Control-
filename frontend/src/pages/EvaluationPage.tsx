@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import client, { API_URL } from '../api/client';
-import { useAuthStore } from '../store/authStore';
+import client from '../api/client';
 import type { RagasScores, EvalStatusResponse, RagasEvalRecord } from '../types';
 import {
   ResponsiveContainer,
@@ -104,7 +103,7 @@ const parseContexts = (contexts: string | string[] | undefined): string[] => {
 };
 
 export default function EvaluationPage() {
-  const { token } = useAuthStore();
+  const [reportError, setReportError] = useState('');
   const [evalStatus, setEvalStatus] = useState<EvalStatusResponse | null>(null);
   const [, setLoading] = useState(false);
   const [triggerLoading, setTriggerLoading] = useState(false);
@@ -194,10 +193,17 @@ export default function EvaluationPage() {
     }
   };
 
-  const handleOpenHtmlReport = () => {
-    if (!token) return;
-    const url = `${API_URL}/evaluate/report?token=${token}`;
-    window.open(url, '_blank');
+  const handleOpenHtmlReport = async () => {
+    setReportError('');
+    try {
+      const response = await client.get('/evaluate/report', { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([response.data], { type: 'text/html' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'finsight-evaluation-report.html';
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch { setReportError('The report could not be downloaded. Run an evaluation or try again.'); }
   };
 
   // Convert scores object to Recharts compatible array
@@ -221,7 +227,7 @@ export default function EvaluationPage() {
   };
 
   const scoresData = getChartData(evalStatus?.overall);
-  const COLORS = ['#6366F1', '#8B5CF6', '#3B82F6', '#10B981', '#EC4899'];
+  const COLORS = ['#509f81', '#8B5CF6', '#3B82F6', '#10B981', '#EC4899'];
 
   const getStatusBadgeStyle = (status: string) => {
     const clean = status.toLowerCase();
@@ -394,11 +400,11 @@ export default function EvaluationPage() {
       gap: '8px',
       padding: '10px 18px',
       borderRadius: 'var(--radius-sm)',
-      background: isActive ? 'rgba(99, 102, 241, 0.12)' : 'transparent',
+      background: isActive ? 'rgba(94,157,128, 0.12)' : 'transparent',
       color: isTabDisabled 
         ? 'rgba(255, 255, 255, 0.25)' 
-        : (isActive ? '#818CF8' : 'var(--text-secondary)'),
-      border: isActive ? '1px solid rgba(99, 102, 241, 0.25)' : '1px solid transparent',
+        : (isActive ? '#9bd8bd' : 'var(--text-secondary)'),
+      border: isActive ? '1px solid rgba(94,157,128, 0.25)' : '1px solid transparent',
       cursor: isTabDisabled ? 'not-allowed' : 'pointer',
       fontSize: '13.5px',
       fontWeight: '600',
@@ -411,7 +417,8 @@ export default function EvaluationPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header */}
       <div className="fs-header" style={{ marginBottom: '10px' }}>
-        <h1 className="fs-title">📈 Evaluation Suite</h1>
+        <h1 className="fs-title">Quality & evaluation</h1>
+        {reportError && <div className="form-error" role="alert">{reportError}</div>}
         <p className="fs-subtitle">Trigger performance benchmarks (RAGAS quality indexes) and RBAC compliance security tests.</p>
       </div>
 
@@ -595,7 +602,7 @@ export default function EvaluationPage() {
                     style={{ width: '100%', marginTop: '16px', gap: '8px' }}
                   >
                     <FileText size={14} />
-                    <span>Open HTML Report in New Tab</span>
+                    <span>Download HTML report</span>
                     <ExternalLink size={12} />
                   </button>
                 )}
@@ -704,7 +711,7 @@ export default function EvaluationPage() {
               <div style={{ width: '100%', height: '360px' }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <RadarChart cx="50%" cy="50%" outerRadius="75%" data={radarData}>
-                    <PolarGrid stroke="rgba(99, 102, 241, 0.15)" />
+                    <PolarGrid stroke="rgba(94,157,128, 0.15)" />
                     <PolarAngleAxis dataKey="subject" stroke="#94A3B8" fontSize={11} />
                     <PolarRadiusAxis angle={30} domain={[0, 100]} stroke="#64748B" fontSize={10} />
                     {rolesPresent.map((role) => (
@@ -733,7 +740,7 @@ export default function EvaluationPage() {
               <h3 style={{ fontSize: '14.5px', fontWeight: 700, margin: 0 }}>Quality Metrics Glossary</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', maxHeight: '360px', paddingRight: '4px' }}>
                 <div style={glossaryItemStyle}>
-                  <strong style={{ color: '#6366F1' }}>Faithfulness:</strong>
+                  <strong style={{ color: '#509f81' }}>Faithfulness:</strong>
                   <p style={{ margin: '2px 0 0 0', fontSize: '11.5px', color: 'var(--text-secondary)' }}>Is the answer grounded strictly in the retrieved context? Catches hallucinations.</p>
                 </div>
                 <div style={glossaryItemStyle}>
@@ -1165,7 +1172,7 @@ export default function EvaluationPage() {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Activity size={14} color="#6366F1" />
+                    <Activity size={14} color="#509f81" />
                     <strong style={{ fontSize: '12px', color: '#fff' }}>Generated RAG Response</strong>
                   </div>
                   <div style={textDisplayBoxStyle}>
@@ -1186,7 +1193,7 @@ export default function EvaluationPage() {
                       key={idx} 
                       style={{
                         ...chunkBoxStyle, 
-                        borderLeftColor: ROLE_COLORS[selectedRecord.role.toLowerCase()] || '#6366F1'
+                        borderLeftColor: ROLE_COLORS[selectedRecord.role.toLowerCase()] || '#509f81'
                       }}
                     >
                       <div style={chunkHeaderStyle}>Chunk #{idx + 1}</div>
@@ -1220,7 +1227,7 @@ const counterBadgeStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  background: 'rgba(99, 102, 241, 0.25)',
+  background: 'rgba(94,157,128, 0.25)',
   color: 'var(--primary-hover)',
   borderRadius: '10px',
   padding: '1px 6px',
@@ -1231,7 +1238,7 @@ const counterBadgeStyle: React.CSSProperties = {
 
 const gridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))',
   gap: '24px',
 };
 
@@ -1479,8 +1486,8 @@ const modalBodyStyle: React.CSSProperties = {
 };
 
 const modalQuestionBlockStyle: React.CSSProperties = {
-  background: 'rgba(99, 102, 241, 0.05)',
-  border: '1px solid rgba(99, 102, 241, 0.15)',
+  background: 'rgba(94,157,128, 0.05)',
+  border: '1px solid rgba(94,157,128, 0.15)',
   padding: '12px 16px',
   borderRadius: '8px',
 };
@@ -1508,13 +1515,13 @@ const miniBarTrackStyle: React.CSSProperties = {
 
 const modalOutputGridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))',
   gap: '16px',
 };
 
 const textDisplayBoxStyle: React.CSSProperties = {
   padding: '12px',
-  background: 'rgba(5, 7, 20, 0.4)',
+  background: 'rgba(13,23,25, 0.4)',
   border: '1px solid var(--border)',
   borderRadius: '8px',
   fontSize: '12px',
@@ -1526,7 +1533,7 @@ const textDisplayBoxStyle: React.CSSProperties = {
 
 const chunkBoxStyle: React.CSSProperties = {
   padding: '10px 14px',
-  background: 'rgba(5, 7, 20, 0.25)',
+  background: 'rgba(13,23,25, 0.25)',
   border: '1px solid var(--border)',
   borderLeftWidth: '4px',
   borderRadius: '6px',

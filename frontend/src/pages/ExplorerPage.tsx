@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import client, { API_URL } from '../api/client';
-import { useAuthStore } from '../store/authStore';
+import client from '../api/client';
+import { openPdfPreview } from '../api/documents';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -21,7 +21,7 @@ interface DocInfo {
 }
 
 export default function ExplorerPage() {
-  const { token } = useAuthStore();
+  const [listError, setListError] = useState('');
   const [documents, setDocuments] = useState<DocInfo[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<string>('');
   const [loadingDocs, setLoadingDocs] = useState(false);
@@ -42,15 +42,14 @@ export default function ExplorerPage() {
   // Fetch document lists
   const fetchDocList = async () => {
     setLoadingDocs(true);
+    setListError('');
     try {
       const res = await client.get('/documents');
       setDocuments(res.data);
-      if (res.data.length > 0) {
-        // Don't auto-select to mimic "— Select —" default stream
-        setSelectedDoc('');
-      }
+      setSelectedDoc('');
     } catch (e) {
       console.error('Failed to fetch documents', e);
+      setListError('Documents could not be loaded. Check your connection and choose Refresh.');
     } finally {
       setLoadingDocs(false);
     }
@@ -62,12 +61,14 @@ export default function ExplorerPage() {
 
   // Fetch content on doc selection
   useEffect(() => {
+    const controller = new AbortController();
+    setLoadingContent(false);
     if (!selectedDoc) {
       setDocContent(null);
       return;
     }
 
-    const doc = documents.find(d => d.filename === selectedDoc);
+    const doc = documents.find(d => d.filepath === selectedDoc);
     if (!doc) return;
 
     if (selectedDoc.toLowerCase().endsWith('.pdf')) {
@@ -79,8 +80,10 @@ export default function ExplorerPage() {
       setLoadingContent(true);
       try {
         const res = await client.get('/documents/content', {
-          params: { filepath: doc.filepath }
+          params: { filepath: doc.filepath },
+          signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
         setDocContent(res.data);
         // Reset grid parameters on new document load
         setSearchQuery('');
@@ -89,20 +92,22 @@ export default function ExplorerPage() {
         setFilterVal('');
         setCurrentPage(1);
       } catch (e) {
+        if (controller.signal.aborted) return;
         console.error('Failed to load document content', e);
         setDocContent({ type: 'error', message: 'Failed to retrieve file contents.' });
       } finally {
-        setLoadingContent(false);
+        if (!controller.signal.aborted) setLoadingContent(false);
       }
     };
 
     fetchContent();
-  }, [selectedDoc]);
+    return () => controller.abort();
+  }, [selectedDoc, documents]);
 
-  const handleOpenPdf = (filepath: string) => {
-    if (!token) return;
-    const url = `${API_URL}/preview-pdf?filepath=${encodeURIComponent(filepath)}&token=${token}`;
-    window.open(url, '_blank');
+  const handleOpenPdf = async (filepath: string) => {
+    setListError('');
+    try { await openPdfPreview(filepath); }
+    catch (error) { setListError(error instanceof Error ? error.message : 'Preview unavailable.'); }
   };
 
   // Add column filter condition
@@ -163,10 +168,11 @@ export default function ExplorerPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {listError && <div className="form-error" role="alert">{listError}</div>}
       {/* Header */}
       <div className="fs-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 className="fs-title">📄 Document Explorer</h1>
+          <h1 className="fs-title">Document library</h1>
           <p className="fs-subtitle">Browse, search, and preview CSV sheets and Markdown guides indexed in your role workspace.</p>
         </div>
         <button className="fs-btn fs-btn-secondary" style={{ padding: '8px 12px' }} onClick={fetchDocList} disabled={loadingDocs}>
@@ -189,7 +195,7 @@ export default function ExplorerPage() {
             >
               <option value="">— Select a document —</option>
               {documents.map((doc, idx) => (
-                <option key={idx} value={doc.filename}>
+                <option key={idx} value={doc.filepath}>
                   {doc.filename}
                 </option>
               ))}
@@ -233,7 +239,7 @@ export default function ExplorerPage() {
               <ReactMarkdown 
                 remarkPlugins={[remarkGfm]}
                 components={{
-                  table: ({ node, ...props }) => (
+                  table: ({ node: _node, ...props }) => (
                     <div className="fs-table-wrap" style={{ margin: '14px 0' }}>
                       <table className="fs-table" {...props} />
                     </div>
@@ -326,7 +332,7 @@ export default function ExplorerPage() {
               <table className="fs-table">
                 <thead>
                   <tr>
-                    <th style={{ width: '50px', minWidth: '50px', textAlign: 'center', background: '#0f1330', color: 'var(--primary-hover)', fontWeight: 'bold', position: 'sticky', left: 0, zIndex: 12 }}>#</th>
+                    <th style={{ width: '50px', minWidth: '50px', textAlign: 'center', background: '#233331', color: 'var(--primary-hover)', fontWeight: 'bold', position: 'sticky', left: 0, zIndex: 12 }}>#</th>
                     {docContent.columns?.map((col: string, idx: number) => (
                       <th key={idx}>{col}</th>
                     ))}
@@ -342,7 +348,7 @@ export default function ExplorerPage() {
                   ) : (
                     paginatedRows.map((row: any, rIdx: number) => (
                       <tr key={rIdx}>
-                        <td style={{ textAlign: 'center', background: 'rgba(99, 102, 241, 0.05)', fontWeight: 'bold', color: 'var(--text-muted)', position: 'sticky', left: 0, zIndex: 5, borderRight: '1px solid rgba(99, 102, 241, 0.15)' }}>
+                        <td style={{ textAlign: 'center', background: 'rgba(94,157,128, 0.05)', fontWeight: 'bold', color: 'var(--text-muted)', position: 'sticky', left: 0, zIndex: 5, borderRight: '1px solid rgba(94,157,128, 0.15)' }}>
                           {(currentPage - 1) * pageSize + rIdx + 1}
                         </td>
                         {docContent.columns?.map((col: string, cIdx: number) => (
@@ -451,7 +457,7 @@ const pdfSplashStyle: React.CSSProperties = {
   height: '100%',
   width: '100%',
   padding: '40px',
-  background: 'rgba(5, 7, 20, 0.25)',
+  background: 'rgba(13,23,25, 0.25)',
 };
 
 const pdfIconContainerStyle: React.CSSProperties = {
@@ -460,7 +466,7 @@ const pdfIconContainerStyle: React.CSSProperties = {
   width: '100px',
   height: '100px',
   borderRadius: '50%',
-  background: 'rgba(99, 102, 241, 0.1)',
+  background: 'rgba(94,157,128, 0.1)',
   border: '1px solid var(--border)',
   display: 'flex',
   alignItems: 'center',
@@ -469,7 +475,7 @@ const pdfIconContainerStyle: React.CSSProperties = {
 };
 
 const gridControlPanelStyle: React.CSSProperties = {
-  background: 'rgba(14, 18, 46, 0.45)',
+  background: 'rgba(22,34,37, 0.45)',
   borderBottom: '1px solid var(--border)',
   padding: '12px 24px',
   display: 'flex',
@@ -497,7 +503,7 @@ const filterPanelGridStyle: React.CSSProperties = {
   flexDirection: 'column',
   gap: '8px',
   padding: '10px',
-  background: 'rgba(5, 7, 20, 0.3)',
+  background: 'rgba(13,23,25, 0.3)',
   border: '1px solid rgba(255, 255, 255, 0.03)',
   borderRadius: 'var(--radius-sm)',
 };
@@ -514,8 +520,8 @@ const filterTagStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: '8px',
   padding: '4px 10px',
-  background: 'rgba(99, 102, 241, 0.1)',
-  border: '1px solid rgba(99, 102, 241, 0.25)',
+  background: 'rgba(94,157,128, 0.1)',
+  border: '1px solid rgba(94,157,128, 0.25)',
   borderRadius: '4px',
   fontSize: '11.5px',
   color: 'var(--text-secondary)',
@@ -530,7 +536,7 @@ const removeTagBtnStyle: React.CSSProperties = {
 };
 
 const paginationFooterStyle: React.CSSProperties = {
-  background: 'rgba(14, 18, 46, 0.85)',
+  background: 'rgba(22,34,37, 0.85)',
   borderTop: '1px solid var(--border)',
   padding: '12px 24px',
   display: 'flex',

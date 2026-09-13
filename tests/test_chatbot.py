@@ -25,9 +25,9 @@ def regular_headers():
     return {"Authorization": f"Bearer {token}"}
 
 def test_create_role_c_level(c_level_headers):
-    res = client.post("/create-role", headers=c_level_headers, data={"role_name": "engineering"})
+    res = client.post("/create-role", headers=c_level_headers, data={"role_name": "support_ops"})
     assert res.status_code == 200
-    assert "Role 'engineering' created" in res.json().get("message", "")
+    assert "Role 'support_ops' created" in res.json().get("message", "")
 
 def test_create_user_c_level(c_level_headers):
     # First ensure the role exists
@@ -38,7 +38,7 @@ def test_create_user_c_level(c_level_headers):
         headers=c_level_headers,
         data={
             "username": "newuser",
-            "password": "newpass",
+            "password": "new-password-for-test",
             "role": "marketing"
         }
     )
@@ -152,8 +152,9 @@ def test_chat_sql_role_passed(mock_ask_csv, mock_detect, regular_headers):
     assert res.status_code == 200
     mock_ask_csv.assert_called_once_with("Show my records", "HR", "hr", return_sql=True)
 
+@patch("app.api.chat.detect_query_type_llm", return_value="RAG")
 @patch("app.api.chat.ask_rag", return_value={"answer": "No documents found for your role."})
-def test_chat_rag_returns_nothing_for_unmatched_docs(mock_ask_rag, regular_headers):
+def test_chat_rag_returns_nothing_for_unmatched_docs(mock_ask_rag, mock_detect, regular_headers):
     res = client.post(
         "/chat",
         headers=regular_headers,

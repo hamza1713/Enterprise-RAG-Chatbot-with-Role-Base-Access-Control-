@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import client from '../api/client';
 import { Upload, CheckCircle, AlertCircle } from 'lucide-react';
 
@@ -12,6 +12,22 @@ export default function UploadPage() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; if (pollingRef.current) clearInterval(pollingRef.current); };
+  }, []);
+  const selectFile = (file: File) => {
+    if (uploading || indexing) return;
+    if (!/\.(csv|md|pdf)$/i.test(file.name) || file.size === 0 || file.size > 20 * 1024 * 1024) {
+      setSelectedFile(null);
+      setErrorMsg('Choose a non-empty CSV, Markdown, or PDF file up to 20 MB.');
+      return;
+    }
+    setSelectedFile(file); setStatusMsg(null); setErrorMsg(null);
+  };
 
   // Fetch security roles list on load
   useEffect(() => {
@@ -31,9 +47,7 @@ export default function UploadPage() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setSelectedFile(e.target.files[0]);
-      setStatusMsg(null);
-      setErrorMsg(null);
+      selectFile(e.target.files[0]);
     }
   };
 
@@ -58,6 +72,7 @@ export default function UploadPage() {
           'Content-Type': 'multipart/form-data'
         }
       });
+      if (!mountedRef.current) return;
 
       setUploading(false);
       setIndexing(true);
@@ -74,8 +89,11 @@ export default function UploadPage() {
   };
 
   const pollIndexingStatus = (filename: string) => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
     let attempts = 0;
+    let pending = false;
     const interval = setInterval(async () => {
+      if (pending || !mountedRef.current) return;
       attempts++;
       if (attempts > 300) { // Timeout after 7.5 mins
         clearInterval(interval);
@@ -85,11 +103,13 @@ export default function UploadPage() {
       }
 
       try {
+        pending = true;
         const res = await client.get('/indexing-status', {
           params: { filename }
         });
 
         const { embedded, total_chunks, embedded_chunks } = res.data;
+        if (!mountedRef.current) return;
 
         if (embedded === 1) {
           clearInterval(interval);
@@ -111,15 +131,18 @@ export default function UploadPage() {
         }
       } catch (e) {
         console.warn('Failed to poll indexing status', e);
+      } finally {
+        pending = false;
       }
     }, 1500);
+    pollingRef.current = interval;
   };
 
   return (
     <div>
       {/* Header */}
       <div className="fs-header">
-        <h1 className="fs-title">📤 Upload knowledge documents</h1>
+        <h1 className="fs-title">Upload documents</h1>
         <p className="fs-subtitle">Upload CSV datasets, Markdown guides, or PDF logs to securely index them in RAG knowledge bases.</p>
       </div>
 
@@ -142,17 +165,18 @@ export default function UploadPage() {
           </div>
 
           {/* File Picker Container */}
-          <div style={filePickerContainerStyle(selectedFile !== null)}>
+          <div style={filePickerContainerStyle(selectedFile !== null)} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (event.dataTransfer.files[0]) selectFile(event.dataTransfer.files[0]); }}>
             <input
               type="file"
               id="file-upload-input"
+              ref={fileInputRef}
               style={{ display: 'none' }}
               onChange={handleFileChange}
               accept=".csv,.md,.pdf"
               disabled={uploading || indexing}
             />
             
-            <label htmlFor="file-upload-input" style={pickerLabelStyle(uploading || indexing)}>
+            <button type="button" className="upload-picker" onClick={() => { if (fileInputRef.current) { fileInputRef.current.value = ''; fileInputRef.current.click(); } }} disabled={uploading || indexing} style={pickerLabelStyle(uploading || indexing)}>
               <Upload size={32} color="var(--primary)" style={{ marginBottom: '12px' }} />
               {selectedFile ? (
                 <div>
@@ -161,11 +185,11 @@ export default function UploadPage() {
                 </div>
               ) : (
                 <div>
-                  <span style={pickerPrimaryTextStyle}>Click to browse document</span>
-                  <span style={pickerSecondaryTextStyle}>Supports CSV, Markdown (.md), and PDF files</span>
+                  <span style={pickerPrimaryTextStyle}>Drop a file here, or browse</span>
+                  <span style={pickerSecondaryTextStyle}>CSV, Markdown, or PDF · Up to 20 MB</span>
                 </div>
               )}
-            </label>
+            </button>
           </div>
 
           {/* Action button */}
@@ -181,7 +205,7 @@ export default function UploadPage() {
 
           {/* Messages */}
           {errorMsg && (
-            <div style={errorContainerStyle}>
+            <div role="alert" style={errorContainerStyle}>
               <AlertCircle size={16} />
               <span>{errorMsg}</span>
             </div>
@@ -239,8 +263,8 @@ const hintStyle: React.CSSProperties = {
 };
 
 const filePickerContainerStyle = (hasFile: boolean): React.CSSProperties => ({
-  border: `2px dashed ${hasFile ? 'var(--primary)' : 'rgba(99, 102, 241, 0.25)'}`,
-  background: 'rgba(5, 7, 20, 0.4)',
+  border: `2px dashed ${hasFile ? 'var(--primary)' : 'rgba(94,157,128, 0.25)'}`,
+  background: 'rgba(13,23,25, 0.4)',
   borderRadius: 'var(--radius-md)',
   padding: '32px 16px',
   textAlign: 'center',

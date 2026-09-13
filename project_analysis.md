@@ -1,3 +1,5 @@
+> Historical architecture notes; parts refer to the earlier Streamlit interface. Use [PRODUCTION_READINESS_REPORT.md](PRODUCTION_READINESS_REPORT.md) for the current audit and release status.
+
 # 🔍 FinSight: Enterprise RAG & SQL Workspace
 ## Comprehensive Project Analysis, Architecture Rationale, and Enterprise Recruiter Prep Guide
 

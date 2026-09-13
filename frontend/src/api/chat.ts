@@ -1,4 +1,5 @@
 import { API_URL } from './client';
+import { readNdjson } from './ndjson';
 
 export interface ChatChunk {
   type: 'init' | 'fallback' | 'token' | 'metadata' | 'error';
@@ -17,11 +18,13 @@ export async function streamChat(
   token: string,
   onChunk: (chunk: ChatChunk) => void,
   onComplete: () => void,
-  onError: (err: any) => void
+  onError: (err: Error) => void,
+  signal?: AbortSignal
 ): Promise<void> {
   try {
     const response = await fetch(`${API_URL}/chat-stream`, {
       method: 'POST',
+      signal,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
@@ -30,6 +33,11 @@ export async function streamChat(
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        sessionStorage.removeItem('finsight_auth');
+        window.location.assign('/login');
+        return;
+      }
       const errText = await response.text().catch(() => 'Unknown HTTP error');
       throw new Error(`Server returned HTTP ${response.status}: ${errText}`);
     }
@@ -38,44 +46,19 @@ export async function streamChat(
       throw new Error('Response body is empty');
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      
-      // Keep the last partial line in the buffer
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const parsed: ChatChunk = JSON.parse(trimmed);
-          onChunk(parsed);
-        } catch (e) {
-          console.error('Failed to parse NDJSON line:', trimmed, e);
-        }
+    let receivedTerminalRecord = false;
+    for await (const chunk of readNdjson<ChatChunk>(response.body)) {
+      if (!chunk || !['init', 'fallback', 'token', 'metadata', 'error'].includes(chunk.type)) {
+        throw new Error('The server returned an invalid response. Please try again.');
       }
+      if (chunk.type === 'metadata' || chunk.type === 'error') receivedTerminalRecord = true;
+      onChunk(chunk);
     }
-
-    // Process remaining buffer
-    if (buffer.trim()) {
-      try {
-        const parsed: ChatChunk = JSON.parse(buffer.trim());
-        onChunk(parsed);
-      } catch (e) {
-        console.error('Failed to parse final buffer line:', buffer, e);
-      }
-    }
+    if (!receivedTerminalRecord) throw new Error('The response was interrupted before completion. Please try again.');
 
     onComplete();
-  } catch (err: any) {
-    onError(err);
+  } catch (err: unknown) {
+    if (signal?.aborted) return;
+    onError(err instanceof Error ? err : new Error('The connection was interrupted. Please try again.'));
   }
 }

@@ -28,6 +28,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source code
 COPY . /app
 
+# Production Compose runs this image as the unprivileged application user.
+RUN useradd --uid 10001 --create-home finsight \
+    && mkdir -p /app/static/data /app/static/uploads /app/chroma_db \
+    && chown -R finsight:finsight /app
+
 # Expose FastAPI application port
 EXPOSE 8000
 

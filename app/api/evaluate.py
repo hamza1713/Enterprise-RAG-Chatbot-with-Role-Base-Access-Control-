@@ -23,15 +23,16 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.auth import get_current_user
+from app.core.config import EVAL_OUTPUT_DIR
 
 logger = logging.getLogger("FinSight.EvaluateAPI")
 router = APIRouter(prefix="/evaluate", tags=["Evaluation"])
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-EVAL_DIR         = Path(__file__).resolve().parent.parent / "rag_evaluator"
+EVAL_DIR         = EVAL_OUTPUT_DIR
 RAGAS_CSV        = EVAL_DIR / "evaluation_results_ragas.csv"
 SECURITY_JSON    = EVAL_DIR / "rbac_security_report.json"
 REPORT_HTML      = EVAL_DIR / "ragas_report.html"
@@ -49,7 +50,7 @@ _eval_running = False
 class EvaluateRequest(BaseModel):
     mode: Literal["full", "quality_only", "security_only"] = "full"
     roles: Optional[list[str]] = None
-    max_per_role: int = 15
+    max_per_role: int = Field(default=15, ge=1, le=100)
     use_builtin_dataset: bool = False
 
 

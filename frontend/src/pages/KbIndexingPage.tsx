@@ -156,7 +156,7 @@ export default function KbIndexingPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '32px' }}>
       {/* Header */}
       <div className="fs-header">
-        <h1 className="fs-title">🗂️ Knowledge Base — Indexing Status</h1>
+        <h1 className="fs-title">Knowledge base</h1>
         <p className="fs-subtitle">Monitor, retry, and manage the document indexing pipeline in real time.</p>
       </div>
 
@@ -177,11 +177,11 @@ export default function KbIndexingPage() {
 
       {/* 4 Summary Cards */}
       <div style={summaryGridStyle}>
-        <div style={summaryCardStyle('#818CF8')}>
-          <div style={summaryIconStyle('#818CF8')}>📁</div>
+        <div style={summaryCardStyle('#9bd8bd')}>
+          <div style={summaryIconStyle('#9bd8bd')}>📁</div>
           <div>
             <div style={summaryLabelStyle}>Total Docs</div>
-            <div style={summaryValueStyle('#818CF8')}>{summary.total}</div>
+            <div style={summaryValueStyle('#9bd8bd')}>{summary.total}</div>
           </div>
         </div>
 
@@ -343,7 +343,7 @@ export default function KbIndexingPage() {
           <table className="fs-table">
             <thead>
               <tr>
-                <th style={{ width: '50px', minWidth: '50px', textAlign: 'center', background: '#0f1330', color: 'var(--primary-hover)', fontWeight: 'bold', position: 'sticky', left: 0, zIndex: 12 }}>#</th>
+                <th style={{ width: '50px', minWidth: '50px', textAlign: 'center', background: '#233331', color: 'var(--primary-hover)', fontWeight: 'bold', position: 'sticky', left: 0, zIndex: 12 }}>#</th>
                 <th>Document</th>
                 <th>Role</th>
                 <th>Status</th>
@@ -363,7 +363,7 @@ export default function KbIndexingPage() {
                   const rowPct = doc.total_chunks > 0 ? Math.floor((doc.embedded_chunks / doc.total_chunks) * 100) : 0;
                   return (
                     <tr key={doc.id || idx}>
-                      <td style={{ textAlign: 'center', background: 'rgba(99, 102, 241, 0.05)', fontWeight: 'bold', color: 'var(--text-muted)', position: 'sticky', left: 0, zIndex: 5, borderRight: '1px solid rgba(99, 102, 241, 0.15)' }}>
+                      <td style={{ textAlign: 'center', background: 'rgba(94,157,128, 0.05)', fontWeight: 'bold', color: 'var(--text-muted)', position: 'sticky', left: 0, zIndex: 5, borderRight: '1px solid rgba(94,157,128, 0.15)' }}>
                         {idx + 1}
                       </td>
                       <td style={{ color: '#E2E8F0', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={doc.filename}>
@@ -407,7 +407,7 @@ export default function KbIndexingPage() {
 
 // Inline CSS variables
 const infoBannerStyle: React.CSSProperties = {
-  background: 'rgba(99, 102, 241, 0.05)',
+  background: 'rgba(94,157,128, 0.05)',
   border: '1px solid var(--border)',
   borderRadius: 'var(--radius-md)',
   padding: '16px 20px',
@@ -429,7 +429,7 @@ const infoTextStyle: React.CSSProperties = {
 
 const summaryGridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, 1fr)',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
   gap: '16px',
   marginBottom: '20px',
 };
@@ -524,7 +524,7 @@ const successBannerStyle: React.CSSProperties = {
 };
 
 const tableControlsRowStyle: React.CSSProperties = {
-  background: 'rgba(14, 18, 46, 0.45)',
+  background: 'rgba(22,34,37, 0.45)',
   borderBottom: '1px solid var(--border)',
   padding: '14px 24px',
   display: 'flex',
@@ -533,7 +533,7 @@ const tableControlsRowStyle: React.CSSProperties = {
 };
 
 const tableFooterStyle: React.CSSProperties = {
-  background: 'rgba(14, 18, 46, 0.85)',
+  background: 'rgba(22,34,37, 0.85)',
   borderTop: '1px solid var(--border)',
   padding: '10px 24px',
   fontSize: '11.5px',

@@ -10,7 +10,8 @@ import remarkGfm from 'remark-gfm';
 import { useAuthStore } from '../store/authStore';
 import { streamChat } from '../api/chat';
 import type { ChatChunk } from '../api/chat';
-import client, { API_URL } from '../api/client';
+import client from '../api/client';
+import { openPdfPreview } from '../api/documents';
 import {
   Send,
   Trash2,
@@ -92,7 +93,7 @@ function CopyButton({ text }: { text: string }) {
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (_) {}
+    } catch {}
   };
   return (
     <button
@@ -108,7 +109,7 @@ function CopyButton({ text }: { text: string }) {
 /* ─── Main ChatPage component ────────────────────────────────────────────────── */
 
 export default function ChatPage() {
-  const { token, username } = useAuthStore();
+  const { token, username, role } = useAuthStore();
 
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -119,10 +120,13 @@ export default function ChatPage() {
   const [fileContentCache, setFileContentCache] = useState<Record<string, any>>({});
   const [loadingFile, setLoadingFile] = useState<Record<string, boolean>>({});
   const [tokenCount, setTokenCount] = useState(0);
+  const [previewError, setPreviewError] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<boolean>(false);
+  const controllerRef = useRef<AbortController | null>(null);
+  useEffect(() => () => controllerRef.current?.abort(), []);
   const lastStreamIdRef = useRef<string>('');
 
   /* ─── Fetch document list ─────────────────────────────────────────── */
@@ -132,7 +136,7 @@ export default function ChatPage() {
       try {
         const res = await client.get('/documents');
         setAccessibleDocs(res.data);
-      } catch (_) {}
+      } catch {}
     };
     fetchDocs();
   }, []);
@@ -169,6 +173,9 @@ export default function ChatPage() {
       if (!q || isSending || !token) return;
 
       abortRef.current = false;
+      controllerRef.current?.abort();
+      const controller = new AbortController();
+      controllerRef.current = controller;
       setIsSending(true);
       setInputValue('');
       setTokenCount(0);
@@ -207,7 +214,7 @@ export default function ChatPage() {
         q,
         token,
         (chunk: ChatChunk) => {
-          if (abortRef.current) return;
+          if (controller.signal.aborted || abortRef.current) return;
 
           if (chunk.type === 'init') {
             if (chunk.mode) resolvedMode = chunk.mode;
@@ -239,6 +246,7 @@ export default function ChatPage() {
           }
         },
         () => {
+          if (controller.signal.aborted) return;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
@@ -257,6 +265,7 @@ export default function ChatPage() {
           setIsSending(false);
         },
         (err) => {
+          if (controller.signal.aborted) return;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
@@ -269,7 +278,8 @@ export default function ChatPage() {
             )
           );
           setIsSending(false);
-        }
+        },
+        controller.signal
       );
     },
     [isSending, token]
@@ -279,6 +289,7 @@ export default function ChatPage() {
 
   const handleStop = () => {
     abortRef.current = true;
+    controllerRef.current?.abort();
     // Mark the streaming message as done
     setMessages((prev) =>
       prev.map((m) =>
@@ -293,6 +304,7 @@ export default function ChatPage() {
   /* ─── Clear chat ──────────────────────────────────────────────────── */
 
   const handleClear = () => {
+    handleStop();
     setMessages([]);
     setOpenSources({});
     setOpenSql({});
@@ -303,7 +315,7 @@ export default function ChatPage() {
   /* ─── Keyboard handler ────────────────────────────────────────────── */
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend(inputValue);
     }
@@ -326,18 +338,16 @@ export default function ChatPage() {
           params: { filepath },
         });
         setFileContentCache((prev) => ({ ...prev, [filepath]: res.data }));
-      } catch (_) {} finally {
+      } catch {} finally {
         setLoadingFile((prev) => ({ ...prev, [filepath]: false }));
       }
     }
   };
 
-  const openPdfTab = (filepath: string) => {
-    if (!token) return;
-    window.open(
-      `${API_URL}/preview-pdf?filepath=${encodeURIComponent(filepath)}&token=${token}`,
-      '_blank'
-    );
+  const openPdfTab = async (filepath: string) => {
+    setPreviewError('');
+    try { await openPdfPreview(filepath); }
+    catch (error) { setPreviewError(error instanceof Error ? error.message : 'Preview unavailable.'); }
   };
 
   /* ─── Source file content renderer ───────────────────────────────── */
@@ -363,7 +373,7 @@ export default function ChatPage() {
           <table className="fs-table">
             <thead>
               <tr>
-                <th style={{ width: '50px', minWidth: '50px', textAlign: 'center', background: '#0f1330', color: 'var(--primary-hover)', fontWeight: 'bold', position: 'sticky', left: 0, zIndex: 12 }}>#</th>
+                <th style={{ width: '50px', minWidth: '50px', textAlign: 'center', background: '#233331', color: 'var(--primary-hover)', fontWeight: 'bold', position: 'sticky', left: 0, zIndex: 12 }}>#</th>
                 {cache.columns?.map((col: string, i: number) => (
                   <th key={i}>{col}</th>
                 ))}
@@ -372,7 +382,7 @@ export default function ChatPage() {
             <tbody>
               {cache.data?.slice(0, 30).map((row: any, rIdx: number) => (
                 <tr key={rIdx}>
-                  <td style={{ textAlign: 'center', background: 'rgba(99, 102, 241, 0.05)', fontWeight: 'bold', color: 'var(--text-muted)', position: 'sticky', left: 0, zIndex: 5, borderRight: '1px solid rgba(99, 102, 241, 0.15)' }}>
+                  <td style={{ textAlign: 'center', background: 'rgba(94,157,128, 0.05)', fontWeight: 'bold', color: 'var(--text-muted)', position: 'sticky', left: 0, zIndex: 5, borderRight: '1px solid rgba(94,157,128, 0.15)' }}>
                     {rIdx + 1}
                   </td>
                   {cache.columns?.map((col: string, cIdx: number) => (
@@ -401,7 +411,7 @@ export default function ChatPage() {
           style={{
             marginTop: '8px',
             padding: '14px',
-            background: 'rgba(5,7,20,0.6)',
+            background: 'rgba(13,23,25,0.6)',
             borderRadius: '8px',
             border: '1px solid var(--border)',
           }}
@@ -409,7 +419,7 @@ export default function ChatPage() {
           <ReactMarkdown 
             remarkPlugins={[remarkGfm]}
             components={{
-              table: ({ node, ...props }) => (
+              table: ({ node: _node, ...props }) => (
                 <div className="fs-table-wrap">
                   <table className="fs-table" {...props} />
                 </div>
@@ -432,22 +442,23 @@ export default function ChatPage() {
   /* ─── Suggestion pills ────────────────────────────────────────────── */
 
   const suggestions = [
-    { icon: <BarChart2 size={14} />, text: 'Show me my financial data' },
-    { icon: <FileText size={14} />, text: 'Summarize the HR policy' },
-    { icon: <Database size={14} />, text: 'List all tables in the database' },
-    { icon: <Sparkles size={14} />, text: 'What insights can you give me?' },
+    { icon: <FileText size={18} />, text: 'Summarize our employee handbook' },
+    { icon: <BarChart2 size={18} />, text: `Summarize the key findings in ${role?.toLowerCase() === 'c-level' ? 'our department' : `our ${role || 'department'}`} reports` },
+    { icon: <Database size={18} />, text: 'What datasets are available to my role?' },
+    { icon: <Sparkles size={18} />, text: 'What are our company leave policies?' },
   ];
 
   /* ─── Render ──────────────────────────────────────────────────────── */
 
   return (
     <div className="chat-page-root">
+      {previewError && <div className="form-error" role="alert">{previewError}</div>}
       {/* ── Header ── */}
       <div className="chat-page-header">
         <div>
           <h1 className="fs-title" style={{ fontSize: '20px', marginBottom: '2px' }}>
             <Bot size={20} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '8px' }} />
-            AI Chat
+            Your AI assistant
           </h1>
           <p className="fs-subtitle">
             Ask questions across your documents, tables, and reports.{' '}
@@ -480,10 +491,11 @@ export default function ChatPage() {
             <div className="chat-welcome-icon">
               <Zap size={32} color="var(--primary-hover)" />
             </div>
-            <h2 className="chat-welcome-title">Welcome, {username || 'there'}!</h2>
+            <span className="eyebrow" style={{ marginBottom: 14 }}>A LITTLE CURIOSITY. A CLEARER PICTURE.</span>
+            <h2 className="chat-welcome-title">What would you like to discover?</h2>
             <p className="chat-welcome-sub">
-              I have access to your role-scoped documents and structured data.
-              Ask me anything—I'll search documents (RAG) or run SQL automatically.
+              Welcome, {username || 'there'}. Explore your team's knowledge,
+              make sense of your data, and find answers with sources.
             </p>
             <div className="chat-suggestions-grid">
               {suggestions.map((s, i) => (
@@ -537,7 +549,7 @@ export default function ChatPage() {
                         <ReactMarkdown 
                           remarkPlugins={[remarkGfm]}
                           components={{
-                            table: ({ node, ...props }) => (
+                            table: ({ node: _node, ...props }) => (
                               <div className="fs-table-wrap" style={{ margin: '12px 0' }}>
                                 <table className="fs-table" {...props} />
                               </div>
@@ -678,6 +690,8 @@ export default function ChatPage() {
 
         <div className="chat-input-container">
           <textarea
+            aria-label="Ask your AI assistant"
+            maxLength={8000}
             ref={textareaRef}
             className="chat-textarea"
             placeholder="Ask a question about your workspace data… (Enter to send)"
@@ -699,7 +713,7 @@ export default function ChatPage() {
         </div>
 
         <div className="chat-input-footer">
-          <span>FinSight RAG · Role-Scoped · JWT Secured</span>
+          <span>Answers from your workspace. Review sources before making decisions.</span>
           {inputValue.length > 0 && (
             <span className="chat-char-count">{inputValue.length} chars</span>
           )}

@@ -15,6 +15,7 @@ Handles:
 
 import sqlite3
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Form
 
@@ -48,7 +49,13 @@ def create_role(
     role_name: str = Form(...),
     user: dict = Depends(_require_clevel),
 ):
+    role_name = role_name.strip()
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{1,39}', role_name):
+        raise HTTPException(status_code=400, detail="Use 2–40 letters, numbers, underscores, or hyphens for a role, starting with a letter.")
     conn = get_db_conn()
+    if conn.execute('SELECT 1 FROM roles WHERE LOWER(role_name)=LOWER(?)', (role_name,)).fetchone():
+        conn.close()
+        raise HTTPException(status_code=409, detail="Role already exists")
     try:
         conn.execute("INSERT INTO roles (role_name) VALUES (?)", (role_name.strip(),))
         conn.commit()
@@ -67,16 +74,22 @@ def create_user(
     role:     str = Form(...),
     user: dict = Depends(_require_clevel),
 ):
+    username = username.strip()
+    if not re.fullmatch(r'[A-Za-z0-9_.-]{3,64}', username):
+        raise HTTPException(status_code=400, detail="Usernames must be 3–64 letters, numbers, periods, underscores, or hyphens.")
+    if len(password) < 12 or len(password.encode('utf-8')) > 72:
+        raise HTTPException(status_code=400, detail="Passwords must have at least 12 characters and at most 72 UTF-8 bytes.")
     conn = get_db_conn()
     c    = conn.cursor()
-    c.execute("SELECT 1 FROM roles WHERE LOWER(role_name)=LOWER(?)", (role,))
-    if not c.fetchone():
+    c.execute("SELECT role_name FROM roles WHERE LOWER(role_name)=LOWER(?)", (role.strip(),))
+    role_row = c.fetchone()
+    if not role_row:
         conn.close()
         raise HTTPException(status_code=400, detail="Invalid role")
     try:
         c.execute(
             "INSERT INTO users (username, password, role) VALUES (?,?,?)",
-            (username.strip(), hash_password(password.strip()), role.strip()),
+            (username, hash_password(password), role_row[0]),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -88,7 +101,7 @@ def create_user(
 
 # ── Indexing status ───────────────────────────────────────────────────────────
 @router.get("/indexing-status")
-def get_indexing_status(filename: str, user: dict = Depends(get_current_user)):
+def get_indexing_status(filename: str, user: dict = Depends(_require_clevel)):
     """Per-file status — used by the upload progress bar."""
     conn = get_db_conn()
     row  = conn.execute(

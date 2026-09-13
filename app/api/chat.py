@@ -12,7 +12,7 @@ import logging
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.rag.classifier import detect_query_type_llm, is_conversational_query
 from app.rag.csv_query import ask_csv
@@ -25,7 +25,7 @@ router = APIRouter(tags=["chat"])
 
 
 class ChatRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=8000)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -159,7 +159,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "sources": [],
         }
 
-    mode          = detect_query_type_llm(question)
+    mode          = await asyncio.to_thread(detect_query_type_llm, question)
     result:  dict = {}
     fallback_used = False
 
@@ -204,7 +204,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
 
     denial        = check_cross_dept_access(question, role)
     is_greeting   = (not denial) and is_conversational_query(question)
-    mode          = "DENIED" if denial else ("GREETING" if is_greeting else detect_query_type_llm(question))
+    mode          = "DENIED" if denial else ("GREETING" if is_greeting else await asyncio.to_thread(detect_query_type_llm, question))
 
     async def event_generator():
         yield json.dumps({"type": "init", "user": username, "role": role, "mode": mode}) + "\n"

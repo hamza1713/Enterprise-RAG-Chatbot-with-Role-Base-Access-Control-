@@ -38,7 +38,7 @@ try:
 except ImportError:
     _COHERE_AVAILABLE = False
 
-from app.core.config import google_api_key, cohere_api_key
+from app.core.config import google_api_key, cohere_api_key, CHROMA_DIR
 from app.core.database import get_db_conn
 
 
@@ -133,68 +133,21 @@ from chromadb.config import Settings
 _chroma_settings = Settings(
     anonymized_telemetry=False,
     is_persistent=True,
-    persist_directory="chroma_db",
+    persist_directory=str(CHROMA_DIR),
 )
 
 _vs_lock = threading.Lock()
 
 vectorstore = Chroma(
     collection_name="my_collection",
-    persist_directory="chroma_db",
+    persist_directory=str(CHROMA_DIR),
     embedding_function=google_embeddings,
     client_settings=_chroma_settings,
 )
 
 
-# ── Self-healing: dimension mismatch ─────────────────────────────────────────
-
-def _reset_databases(reason: str) -> None:
-    """Wipe Chroma on disk and reset SQLite embed flags. Call _reinit_vectorstore() after."""
-    import shutil
-    print(f"[Chroma] Resetting DB ({reason})…")
-    shutil.rmtree("chroma_db", ignore_errors=True)
-    os.makedirs("chroma_db", exist_ok=True)
-    Path("chroma_db/.semantic_chunking_migrated").unlink(missing_ok=True)
-    try:
-        conn = get_db_conn()
-        conn.execute("UPDATE documents SET embedded=0, total_chunks=0, embedded_chunks=0")
-        conn.commit()
-        conn.close()
-        print("[Chroma] SQLite reset — all files will be re-indexed.")
-    except Exception as exc:
-        print(f"[Chroma] SQLite reset error: {exc}")
-
-
-def _reinit_vectorstore() -> None:
-    """Re-instantiate the global vectorstore singleton. Must be called after _reset_databases()."""
-    global vectorstore
-    with _vs_lock:
-        vectorstore = Chroma(
-            collection_name="my_collection",
-            persist_directory="chroma_db",
-            embedding_function=google_embeddings,
-            client_settings=_chroma_settings,
-        )
-    try:
-        Path("chroma_db/.semantic_chunking_migrated").touch()
-    except Exception:
-        pass
-    print("[Chroma] Vectorstore singleton re-initialised.")
-
-
-# Dimension-mismatch self-heal on startup
-try:
-    vectorstore.similarity_search("test", k=1)
-except Exception as _e:
-    if "dimension" in str(_e).lower():
-        _reset_databases(f"dimension mismatch: {_e}")
-        _reinit_vectorstore()
-
-# Semantic-chunking migration check
-_mig_flag = Path("chroma_db/.semantic_chunking_migrated")
-if not _mig_flag.exists():
-    _reset_databases("migrating to semantic chunking")
-    _reinit_vectorstore()
+# Importing the application must not contact a model provider or erase an index.
+# Embedding migrations must be scheduled explicitly after backing up all stores.
 
 
 # ════════════════════════════════════════════════════════════════════════════════

@@ -92,7 +92,8 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     na, nb = np.linalg.norm(a), np.linalg.norm(b)
     if na < 1e-9 or nb < 1e-9:
         return 0.0
-    return float(np.dot(a, b) / (na * nb))
+    val = float(np.dot(a, b) / (na * nb))
+    return max(-1.0, min(1.0, val))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -171,7 +172,7 @@ def score_sample(
     try:
         q_emb = _embed_query(question)
         a_emb = _embed_query(answer)
-        results["answer_relevancy"] = max(0.0, _cosine(q_emb, a_emb))
+        results["answer_relevancy"] = max(0.0, min(1.0, _cosine(q_emb, a_emb)))
     except Exception as e:
         logger.warning(f"answer_relevancy failed: {e}")
         results["answer_relevancy"] = float("nan")
@@ -182,7 +183,7 @@ def score_sample(
             ref_emb = _embed_query(reference)
             ctx_embs = _embed_texts(contexts)
             sims = [_cosine(ce, ref_emb) for ce in ctx_embs]
-            results["context_recall"] = float(np.mean(sims))
+            results["context_recall"] = max(0.0, min(1.0, float(np.mean(sims))))
         except Exception as e:
             logger.warning(f"context_recall failed: {e}")
             results["context_recall"] = float("nan")
@@ -196,7 +197,7 @@ def score_sample(
             scores = [_bm25_score(q_toks, _tokenize(c)) for c in contexts]
             best_bm25 = max(scores)
             # Normalize to [0, 1] via sigmoid-like transform (range ~0-20)
-            results["context_precision"] = float(1 / (1 + math.exp(-0.3 * (best_bm25 - 3))))
+            results["context_precision"] = max(0.0, min(1.0, float(1 / (1 + math.exp(-0.3 * (best_bm25 - 3))))))
         except Exception as e:
             logger.warning(f"context_precision failed: {e}")
             results["context_precision"] = float("nan")
@@ -207,7 +208,7 @@ def score_sample(
     if contexts:
         try:
             full_context = " ".join(contexts)
-            results["faithfulness_token"] = _rouge_l_recall(full_context, answer)
+            results["faithfulness_token"] = max(0.0, min(1.0, _rouge_l_recall(full_context, answer)))
         except Exception as e:
             logger.warning(f"faithfulness_token failed: {e}")
             results["faithfulness_token"] = float("nan")
@@ -219,7 +220,7 @@ def score_sample(
         try:
             ref_emb2 = _embed_query(reference)
             a_emb2 = _embed_query(answer)
-            results["answer_similarity"] = max(0.0, _cosine(a_emb2, ref_emb2))
+            results["answer_similarity"] = max(0.0, min(1.0, _cosine(a_emb2, ref_emb2)))
         except Exception as e:
             logger.warning(f"answer_similarity failed: {e}")
             results["answer_similarity"] = float("nan")
@@ -342,7 +343,8 @@ def run_no_llm_evaluation(
             pass_fail[m] = "PASS" if score >= 0.60 else "WARN"
 
     # ── Save ───────────────────────────────────────────────────────────────────
-    out_path = EVAL_DIR / output_csv
+    from app.core.config import EVAL_OUTPUT_DIR
+    out_path = EVAL_OUTPUT_DIR / output_csv
     result_df.to_csv(out_path, index=False)
     logger.info(f"[NoLLMEval] Results saved → {out_path}")
 

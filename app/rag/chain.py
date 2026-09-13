@@ -4,6 +4,7 @@ app/rag/chain.py — High-level ask_rag() helper.
 Renamed from `app/rag_utils/rag_chain.py`.
 """
 
+import asyncio
 from .module import get_rag_chain
 
 _NOT_FOUND_SIGNAL = "could not find relevant information"
@@ -17,7 +18,7 @@ async def ask_rag(question: str, role: str, cohere_api_key: str | None = None) -
     """
     try:
         chain  = get_rag_chain(user_role=role, cohere_api_key=cohere_api_key)
-        result = chain.invoke({"input": question})
+        result = await asyncio.to_thread(chain.invoke, {"input": question})
 
         answer = result.get("answer", "").strip()
         if not answer:

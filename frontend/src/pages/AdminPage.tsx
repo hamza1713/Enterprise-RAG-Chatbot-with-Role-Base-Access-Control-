@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import client from '../api/client';
 import { UserPlus, ShieldAlert, CheckCircle, AlertCircle } from 'lucide-react';
 
@@ -18,21 +18,19 @@ export default function AdminPage() {
   const [roleSuccess, setRoleSuccess] = useState<string | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
 
-  const fetchRoles = async () => {
+  const fetchRoles = useCallback(async () => {
     try {
       const res = await client.get('/roles');
       setRoles(res.data.roles);
-      if (res.data.roles.length > 0 && !selectedRole) {
-        setSelectedRole(res.data.roles[0]);
-      }
+      if (res.data.roles.length > 0) setSelectedRole(current => current || res.data.roles[0]);
     } catch (e) {
       console.error('Failed to fetch roles', e);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchRoles();
-  }, []);
+  }, [fetchRoles]);
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,7 +45,7 @@ export default function AdminPage() {
 
     const formData = new FormData();
     formData.append('username', username.trim());
-    formData.append('password', password.trim());
+    formData.append('password', password);
     formData.append('role', selectedRole);
 
     try {
@@ -95,7 +93,7 @@ export default function AdminPage() {
     <div>
       {/* Header */}
       <div className="fs-header">
-        <h1 className="fs-title">⚙️ Administrative Controls</h1>
+        <h1 className="fs-title">Administration</h1>
         <p className="fs-subtitle">Manage system users, passwords, and security roles mapping.</p>
       </div>
 
@@ -140,7 +138,8 @@ export default function AdminPage() {
               <input
                 type="password"
                 className="fs-input"
-                placeholder="Enter password"
+                placeholder="At least 12 characters"
+                minLength={12}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={userLoading}
@@ -226,7 +225,7 @@ export default function AdminPage() {
 // Inline CSS for Admin Page Layout
 const gridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))',
   gap: '24px',
   alignItems: 'start',
 };

@@ -1,0 +1,44 @@
+# Single-host deployment candidate. Put an HTTPS gateway in front of port 8080.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    user: "10001:10001"
+    environment:
+      APP_ENV: production
+      PRELOAD_SAMPLE_DATA: "false"
+      JWT_SECRET: ${JWT_SECRET:?Set a stable signing secret of at least 32 characters}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set an initial admin password of at least 14 characters}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?Set your Google API key}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set the public HTTPS origin}
+      DB_NAME: /app/static/data/roles_docs.db
+      CHROMA_DIR: /app/chroma_db
+      EVAL_OUTPUT_DIR: /app/static/evaluation
+    volumes:
+      - app-data:/app/static
+      - vector-data:/app/chroma_db
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend.production
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  app-data:
+  vector-data:

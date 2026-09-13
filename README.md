@@ -1,3 +1,5 @@
+> **Current review:** See [PRODUCTION_READINESS_REPORT.md](PRODUCTION_READINESS_REPORT.md) for verified fixes, remaining launch blockers, and the feature roadmap. The application is a staging candidate, not a certified production release. See [deployment instructions](deploy/README.md).
+
 <div align="center">
 
 # 🔍 FinSight
@@ -45,7 +47,7 @@
 
 ## 🧠 Overview
 
-**FinSight** is a production-grade, role-based AI workspace built for enterprise environments. It combines **Retrieval-Augmented Generation (RAG)** for unstructured document Q&A with a **Natural Language → SQL** engine for structured CSV analytics — all behind a strict **JWT-authenticated, department-scoped access control layer**.
+**FinSight** is a enterprise-focused, role-based AI workspace built for enterprise environments. It combines **Retrieval-Augmented Generation (RAG)** for unstructured document Q&A with a **Natural Language → SQL** engine for structured CSV analytics — all behind a strict **JWT-authenticated, department-scoped access control layer**.
 
 Users query their department's data in plain English. FinSight automatically classifies each question, routes it to the correct engine (RAG or SQL), and returns a grounded, source-cited response — while silently blocking any attempt to access another department's data.
 
@@ -610,7 +612,7 @@ Cross-department access attempts return a formatted denial message — no data i
 ### Prerequisites
 
 - **Python 3.10+**
-- **Node.js 18+** and **npm** (for the React frontend)
+- **Node.js 24** and **npm** (for the React frontend)
 - A [Google Gemini API key](https://aistudio.google.com/app/apikey)
 - *(Optional)* A [Cohere API key](https://dashboard.cohere.com/) for reranking
 
@@ -748,7 +750,7 @@ pytest tests/test_chatbot.py -v
 
 **Tests cover:**
 - JWT authentication flow (issuance, expiration, and invalid token rejection)
-- RBAC denial for cross-department queries (zero data leakage guarantee)
+- RBAC denial for cross-department queries (department access checks)
 - Query classifier routing (SQL vs RAG vs Greetings)
 - Natural language to SQL generation and DuckDB execution
 - Document upload and indexing status
@@ -853,6 +855,6 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 Built with ❤️ for enterprise AI — **FinSight** by FinSolve Technologies
 
-*Role-based intelligence. Zero data leakage. Production-ready.*
+*Role-based intelligence. Source-grounded answers.*
 
 </div>
