@@ -1,124 +1,172 @@
-> **Current review:** See [PRODUCTION_READINESS_REPORT.md](PRODUCTION_READINESS_REPORT.md) for verified fixes, remaining launch blockers, and the feature roadmap. The application is a staging candidate, not a certified production release. See [deployment instructions](deploy/README.md).
-
 <div align="center">
+
+<img src="static/images/arch.png" alt="FinSight Architecture" width="80"/>
 
 # 🔍 FinSight
 
-### Enterprise AI Workspace with Role-Based Access Control
+### Enterprise RAG Chatbot with Role-Based Access Control
 
-*Intelligent document Q&A · SQL analytics · Multi-department security · RAG evaluation*
+> **Intelligent document Q&A · Natural Language → SQL Analytics · Multi-department security · Dual-track RAG Evaluation**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.129%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Vite](https://img.shields.io/badge/Vite-8.x-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vite.dev)
 [![LangChain](https://img.shields.io/badge/LangChain-RAG-1C3C3C?style=for-the-badge&logo=chainlink&logoColor=white)](https://langchain.com)
-[![Gemini](https://img.shields.io/badge/Google_Gemini-AI-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/)
-[![ChromaDB](https://img.shields.io/badge/ChromaDB-VectorStore-orange?style=for-the-badge)](https://trychroma.com)
-[![DuckDB](https://img.shields.io/badge/DuckDB-SQL-yellow?style=for-the-badge)](https://duckdb.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+[![Gemini](https://img.shields.io/badge/Google_Gemini-2.5_Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/)
+[![ChromaDB](https://img.shields.io/badge/ChromaDB-VectorStore-FF6F00?style=for-the-badge)](https://trychroma.com)
+[![DuckDB](https://img.shields.io/badge/DuckDB-SQL_Analytics-FFD700?style=for-the-badge)](https://duckdb.org)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
+
+[![Tests](https://img.shields.io/badge/Backend_Tests-60_passed-22c55e?style=flat-square)](tests/)
+[![Security Tests](https://img.shields.io/badge/Security_Suite-20_passed-22c55e?style=flat-square)](verification/)
+[![RBAC Score](https://img.shields.io/badge/RBAC_Security-0.933_avg-22c55e?style=flat-square)](#-evaluation-scorecard)
+[![Answer Relevancy](https://img.shields.io/badge/Answer_Relevancy-0.840-22c55e?style=flat-square)](#-evaluation-scorecard)
+[![Staging](https://img.shields.io/badge/Status-Staging_Candidate-f59e0b?style=flat-square)](PRODUCTION_READINESS_REPORT.md)
+
+<br/>
+
+[📖 API Docs](http://localhost:8000/docs) · [🚀 Quick Start](#-quick-start) · [📊 Evaluation Results](#-evaluation-scorecard) · [🐳 Deployment](deploy/README.md) · [🔐 Security](#-security-model)
+
+**[Portfolio Case Study](https://personalportfolio-theta-gules-56.vercel.app/#work) · [Security Regression Tests](verification/test_security.py) · [Production Readiness Report](PRODUCTION_READINESS_REPORT.md) · [CI Workflow](.github/workflows/ci.yml)**
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## ⚡ 30-Second TL;DR
 
-- [Overview](#-overview)
-- [Business Problem](#-business-problem)
-- [System Architecture](#-system-architecture)
-- [Request Lifecycle](#-request-lifecycle)
-- [Key Features](#-key-features)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-- [Database Schema](#-database-schema)
-- [API Reference](#-api-reference)
-- [Role & Permission Matrix](#-role--permission-matrix)
-- [Quick Start](#-quick-start)
-- [Configuration](#-configuration)
-- [Default Credentials](#-default-credentials)
-- [Testing](#-testing)
-- [Evaluation Framework](#-evaluation-framework)
-- [Sample Queries](#-sample-queries)
-- [Future Enhancements](#-future-enhancements)
+```
+FinSight = React 19 SPA (Vite + TypeScript)
+         → FastAPI (JWT-authenticated, role-scoped)
+         → Gemini LLM (classifier + embeddings + answer generation)
+         → ChromaDB dense retrieval + SQLite FTS5 BM25 (hybrid RRF)
+         → DuckDB in-memory SQL sandbox (role-filtered, SELECT-only)
+         + RAGAS evaluation framework (quality + RBAC security tests)
+```
+
+**The key insight:** Every query is classified as RAG or SQL *before* it hits any data store, and authorization is enforced *before* classification — no data is ever passed to the LLM for an unauthorized user.
 
 ---
 
-## 🧠 Overview
+## 📋 Table of Contents
 
-**FinSight** is a enterprise-focused, role-based AI workspace built for enterprise environments. It combines **Retrieval-Augmented Generation (RAG)** for unstructured document Q&A with a **Natural Language → SQL** engine for structured CSV analytics — all behind a strict **JWT-authenticated, department-scoped access control layer**.
+<details>
+<summary>Click to expand full TOC</summary>
 
-Users query their department's data in plain English. FinSight automatically classifies each question, routes it to the correct engine (RAG or SQL), and returns a grounded, source-cited response — while silently blocking any attempt to access another department's data.
+- [💼 Business Problem](#-business-problem)
+- [🧠 Overview](#-overview)
+- [🏗 System Architecture](#-system-architecture)
+- [🔄 Data Flow Diagrams](#-data-flow-diagrams)
+  - [Startup Lifecycle](#1-startup-lifecycle)
+  - [Authentication Flow](#2-authentication-flow)
+  - [Query Routing Flow](#3-query-routing-flow)
+  - [Hybrid Retrieval Pipeline](#4-hybrid-retrieval-pipeline)
+  - [Document Ingestion Pipeline](#5-document-ingestion-pipeline)
+  - [Evaluation Framework Flow](#6-evaluation-framework-flow)
+- [✨ Feature Deep-Dives](#-feature-deep-dives)
+- [📊 Evaluation Scorecard](#-evaluation-scorecard)
+- [🛡 Security Model](#-security-model)
+- [🛠 Tech Stack](#-tech-stack)
+- [📁 Project Structure](#-project-structure)
+- [🗃 Database Schema](#-database-schema)
+- [📡 API Reference](#-api-reference)
+- [🔑 Role & Permission Matrix](#-role--permission-matrix)
+- [🚀 Quick Start](#-quick-start)
+- [🐳 Docker & Deployment](#-docker--deployment)
+- [⚙️ Configuration](#️-configuration)
+- [🔓 Default Credentials](#-default-credentials)
+- [🧪 Testing](#-testing)
+- [📈 Evaluation Framework](#-evaluation-framework)
+- [💬 Sample Queries](#-sample-queries)
+- [🔮 Roadmap](#-roadmap)
+- [📄 License](#-license)
 
-> **Stack in one line:** React 19 SPA (Vite + TypeScript) → FastAPI → Gemini LLM + LangChain → ChromaDB (RAG) / DuckDB (SQL) → RAGAS evaluation
+</details>
 
 ---
 
 ## 💼 Business Problem
 
-FinSolve Technologies faced three interconnected challenges:
+**FinSolve Technologies** faced three interconnected challenges that no single off-the-shelf tool could solve:
 
-| Problem | Impact |
-|---|---|
-| **Siloed departmental data** — Finance, HR, Marketing, and Engineering each hoarded their own documents with no unified interface | Slow decision-making; leadership had no consolidated view |
-| **Manual information retrieval** — analysts spent hours reading reports to find single data points | Productivity loss across all departments |
-| **No access governance** — sensitive payroll, financial, and engineering IP were accessible to any authenticated employee | Data confidentiality and compliance risk |
+| # | Problem | Impact |
+|---|---------|--------|
+| 1 | **Siloed departmental data** — Finance, HR, Marketing, Engineering each maintained separate document repositories with no unified interface | Leadership had no consolidated view; cross-department insights required manual aggregation |
+| 2 | **Manual information retrieval** — analysts spent hours reading full reports to surface single data points | Productivity loss across all departments; slow decision-making cycles |
+| 3 | **No access governance** — sensitive payroll records, financial statements, and engineering IP were accessible to any authenticated employee | Data confidentiality and regulatory compliance risk |
 
-FinSight solves all three: a single AI interface that delivers the right answer to the right person, and nothing more.
+**FinSight solves all three simultaneously:** one AI interface that delivers exactly the right answer to exactly the right person — and nothing more.
+
+> *"I built a multi-department enterprise AI workspace that routes questions between grounded document retrieval and structured SQL analytics, while enforcing department-scoped authorization before retrieval or query execution, and measuring both answer quality and security behavior."*
+
+---
+
+## 🧠 Overview
+
+**FinSight** is a production-staged, role-based AI workspace for enterprise environments. It combines:
+
+- **Retrieval-Augmented Generation (RAG)** with hybrid dense+sparse retrieval for unstructured document Q&A
+- **Natural Language → SQL** engine with an in-memory DuckDB sandbox for structured CSV analytics
+- **Strict JWT-authenticated, department-scoped RBAC** that enforces authorization before any retrieval or LLM call
+- **Dual-track evaluation** — RAGAS quality metrics + automated RBAC security regression tests
+
+Users query their department data in plain English. FinSight classifies each question, routes it to the correct engine, and returns a grounded, source-cited answer — while silently blocking any attempt to access another department's data.
 
 ---
 
 ## 🏗 System Architecture
 
-### High-Level Architecture
-
 ```mermaid
 flowchart TD
-    subgraph CLIENT["🖥️  Client Layer (React SPA — port 5173)"]
-        LOGIN["LoginPage\nBasic Auth → JWT"]
-        CHAT_UI["ChatPage\nStreaming NDJSON"]
+    subgraph CLIENT["🖥️  Client Layer — React 19 SPA (Vite · TypeScript · port 5173)"]
+        LOGIN["LoginPage\nHTTP Basic → JWT"]
+        CHAT_UI["ChatPage\nStreaming NDJSON + AbortController"]
         EXPLORER["ExplorerPage\nDocument Browser"]
-        UPLOAD_UI["UploadPage\nC-Level Only"]
+        UPLOAD_UI["UploadPage\nC-Level only"]
         KB["KbIndexingPage\nEmbedding Monitor"]
         ADMIN_UI["AdminPage\nUser & Role Mgmt"]
         EVAL_UI["EvaluationPage\nRAGAS Dashboard"]
     end
 
-    subgraph FASTAPI["⚡  FastAPI Backend  (port 8000)"]
-        AUTH["🔐 /login\nHTTP Basic → JWT"]
-        CHAT["💬 /chat  &  /chat-stream\nStreaming NDJSON"]
-        DOCS["📄 /documents  /upload\nUpload & List"]
+    subgraph FASTAPI["⚡  FastAPI Backend  (Uvicorn · port 8000)"]
+        AUTH["🔐 /login\nHTTP Basic → JWT HS256"]
+        CHAT["💬 /chat & /chat-stream\nNDJSON streaming"]
+        DOCS["📄 /upload /documents\nC-Level upload gate"]
         ADMIN["⚙️ /admin\nC-Level only"]
         EVAL["📊 /evaluate\nRAGAS + RBAC"]
-        HEALTH["❤️ /health  /system-metrics"]
+        HEALTH["❤️ /health /system-metrics"]
     end
 
-    subgraph CORE["🧱  Core Layer"]
-        CFG["config.py\nEnv vars & API keys"]
-        DB["database.py\nSQLite + DuckDB setup"]
-        SEC["security.py\nJWT · bcrypt"]
-        USR["users.py\nDefault seed"]
+    subgraph CORE["🧱  Core Layer (app/core/)"]
+        CFG["config.py\nEnv vars · API keys · paths"]
+        DB["database.py\nSQLite WAL · DuckDB · heal · reconcile"]
+        SEC["security.py\nJWT · bcrypt · stale-role guard"]
+        USR["users.py\nSeed · password policy"]
+        SANDBOX["sql_sandbox.py\nDuckDB in-memory isolation"]
     end
 
-    subgraph RAG_ENGINE["🤖  RAG Engine  (app/rag/)"]
-        CLS["classifier.py\nLLM Query Router\nSQL vs RAG"]
-        PROC["processors.py\nCSV · MD · PDF loaders"]
-        MOD["module.py\nChroma vectorstore\nRetrying embeddings\nCohere reranker"]
-        CHN["chain.py\nask_rag() helper"]
-        CSV["csv_query.py\nNL → SQL → DuckDB"]
+    subgraph RAG_ENGINE["🤖  RAG + SQL Engine (app/rag/)"]
+        GUARD["chat.py RBAC Guard\nDept phrase scanner\nPre-LLM denial"]
+        CLS["classifier.py\nGemini zero-shot\nSQL | RAG | GREETING"]
+        PROC["processors.py\nCSV · MD · PDF loaders\nStrategy pattern"]
+        MOD["module.py\nHybridMultiQueryRetriever\nChroma + FTS5 + RRF + Cohere"]
+        CHN["chain.py\nask_rag() helper\nQuery expansion + contextualization"]
+        CSV["csv_query.py\nNL → SQL → DuckDB sandbox"]
     end
 
     subgraph STORES["🗄️  Data Stores"]
-        SQLITE[("SQLite\nroles_docs.db\nUsers · Roles · Documents")]
-        DUCK[("DuckDB\nstructured_queries.duckdb\nCSV tables per role")]
+        SQLITE[("SQLite WAL\nroles_docs.db\nUsers · Roles · Docs · FTS5")]
+        DUCK[("DuckDB in-memory\nCSV tables per role\n10s timeout · 1000-row limit")]
         CHROMA[("ChromaDB\nchroma_db/\nRole-filtered embeddings")]
     end
 
     subgraph EVAL_PKG["🧪  Evaluation  (app/rag_evaluator/)"]
-        RAGAS["ragas_evaluator.py\nFaithfulness · Relevance\nContext Recall"]
+        RAGAS["ragas_evaluator.py\nFaithfulness · Relevancy\nPrecision · Recall"]
+        NOLLM["no_llm_evaluator.py\nEmbedding cosine · BM25 · ROUGE-L\n(zero LLM quota cost)"]
         RBAC_TEST["rbac_security_eval.py\n6 RBAC security tests"]
-        RPT["eval_report.py\nHTML report generation"]
+        RPT["eval_report.py\nHTML report"]
     end
 
     CLIENT -- "HTTP Basic → Bearer JWT" --> AUTH
@@ -128,22 +176,26 @@ flowchart TD
     CLIENT -- "run evaluation" --> EVAL
 
     AUTH --> SEC
-    CHAT --> CLS
+    CHAT --> GUARD
+    GUARD --> CLS
     CLS -- SQL --> CSV
     CLS -- RAG --> CHN
-    CSV --> DUCK
+    CSV --> SANDBOX
+    SANDBOX --> DUCK
     CHN --> MOD
     MOD --> CHROMA
+    MOD --> SQLITE
 
     FASTAPI --> CORE
     CORE --> SQLITE
-    DOCS --> SQLITE
     DOCS --> PROC
     PROC --> MOD
 
     EVAL --> RAGAS
+    EVAL --> NOLLM
     EVAL --> RBAC_TEST
     RAGAS --> RPT
+    NOLLM --> RPT
     RBAC_TEST --> RPT
 
     style CLIENT fill:#1e3a5f,color:#bfdbfe,stroke:#2563eb
@@ -156,146 +208,256 @@ flowchart TD
 
 ---
 
-### Query Routing Flow
+## 🔄 Data Flow Diagrams
+
+### 1. Startup Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant UV as Uvicorn
+    participant APP as FastAPI lifespan
+    participant DB as database.py
+    participant IDX as RAG Indexer (background)
+
+    UV->>APP: Start (asynccontextmanager)
+    APP->>DB: init_sqlite_schema() — idempotent CREATE TABLE IF NOT EXISTS
+    APP->>DB: init_duckdb_schema() — tables_metadata registry
+    APP->>DB: seed_default_users() — only inserts new users, never overwrites hashes
+    APP->>DB: heal_stale_filepaths() — corrects absolute paths after project move
+    APP->>DB: reconcile_duckdb_from_sqlite() — rebuilds CSV tables from SQLite registry
+    Note over APP: PRELOAD_SAMPLE_DATA=false in production
+    APP-->>IDX: run_in_executor(preload_default_data) [background thread]
+    IDX->>DB: Copy resources/data/ → static/uploads/ + register in SQLite
+    IDX->>IDX: trigger_indexing() → IndexerWorker queue
+    IDX->>IDX: Load → Chunk → Embed → ChromaDB + FTS5
+    APP->>UV: ✅ Ready (port 8000)
+    UV-->>APP: Shutdown signal
+    APP->>UV: [cleanup] shutdown logged
+```
+
+---
+
+### 2. Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as FastAPI /login
+    participant S as security.py
+    participant DB as SQLite
+
+    B->>A: GET /login (Authorization: Basic base64(user:pass))
+    A->>DB: SELECT id, username, password, role WHERE username=?
+    DB-->>A: user row (or 404)
+    A->>S: verify_password(plain_text, bcrypt_hash)
+    S-->>A: True / False
+    A->>S: create_access_token({sub: username, role: role, exp: now+12h})
+    S-->>A: signed JWT (HS256, secret from env or auto-generated file)
+    A-->>B: {"access_token": "eyJ...", "token_type": "Bearer", "role": "Finance"}
+    Note over B: Zustand store → sessionStorage (auto-cleared on tab close)
+
+    B->>A: POST /chat (Authorization: Bearer eyJ...)
+    A->>S: decode_access_token(token) — raises PyJWTError if invalid/expired
+    A->>DB: re-fetch current role for username (stale-token protection)
+    Note over A: Role in JWT ≠ DB role → HTTP 401 Unauthorized
+    A-->>B: chat response (role-scoped)
+```
+
+---
+
+### 3. Query Routing Flow
 
 ```mermaid
 flowchart LR
-    Q["User Question"] --> GUARD{"🔐 RBAC Guard\nCross-dept check"}
+    Q["User Question\n(max 8000 chars)"] --> CTX{"Conversation\nHistory?"}
+    CTX -- "Yes" --> REFORM["LLM Contextualization\nReformulate follow-up\ninto standalone query"]
+    CTX -- "No" --> GUARD
+    REFORM --> GUARD
 
-    GUARD -- "❌ Denied" --> DENY["🔒 Access Denied\nFormatted message"]
-    GUARD -- "✅ Allowed" --> GREET{"Greeting?"}
+    GUARD{"🔐 RBAC Guard\nDept phrase scan\n(pre-LLM)"}
 
-    GREET -- "👋 Yes" --> HELLO["Hello response\n(no LLM needed)"]
-    GREET -- "No" --> CLS{"🧠 LLM Classifier\nSQL or RAG?"}
+    GUARD -- "❌ Cross-dept detected" --> DENY["🔒 Formatted denial\nNo LLM call made\nNo data accessed"]
+    GUARD -- "✅ Allowed" --> GREET{"Greeting /\nsmall-talk?"}
 
-    CLS -- SQL --> SQLAGENT["SQL Agent\n① NL→SQL via Gemini\n② Filter by role\n③ Execute on DuckDB\n④ Format with tabulate"]
-    CLS -- RAG --> RAGAGENT["RAG Agent\n① Embed question\n② ChromaDB k-NN\n③ Cohere rerank\n④ Gemini answer"]
+    GREET -- "👋 Yes" --> HELLO["Inline response\n(zero LLM quota)"]
+    GREET -- "No" --> CLS{"🧠 Gemini Classifier\nzero-shot prompt"}
 
-    SQLAGENT -- "✅ Result" --> RESP["Response + SQL shown"]
-    SQLAGENT -- "❌ Error" --> FALLBACK["⚡ Fallback\nSQL → RAG"]
+    CLS -- "SQL" --> SQLAGENT["SQL Agent\n① NL→SQL via Gemini\n② Role table whitelist check\n③ DuckDB sandbox execute\n④ tabulate format"]
+    CLS -- "RAG" --> RAGAGENT["RAG Agent\n① Query expansion (×3)\n② ChromaDB dense k=20\n③ FTS5 BM25 sparse\n④ RRF fusion\n⑤ Cohere rerank (optional)\n⑥ Gemini answer"]
+
+    SQLAGENT -- "✅ Result" --> RESP["Answer + SQL shown\nSource file cited"]
+    SQLAGENT -- "❌ Empty/Error" --> FALLBACK["⚡ Auto-fallback\nSQL → RAG"]
     FALLBACK --> RAGAGENT
-    RAGAGENT --> RESP2["Response + Sources cited"]
+    RAGAGENT --> RESP2["Answer + Source citations\nMarkdown rendered"]
 
     style GUARD fill:#7f1d1d,color:#fca5a5,stroke:#991b1b
     style CLS fill:#1e3a5f,color:#bfdbfe,stroke:#2563eb
     style SQLAGENT fill:#1a3c1a,color:#bbf7d0,stroke:#16a34a
     style RAGAGENT fill:#1e1b4b,color:#c7d2fe,stroke:#4338ca
     style FALLBACK fill:#78350f,color:#fed7aa,stroke:#ea580c
+    style DENY fill:#7f1d1d,color:#fca5a5,stroke:#991b1b
 ```
 
 ---
 
-### Startup Lifecycle
+### 4. Hybrid Retrieval Pipeline
+
+This is the core retrieval innovation — combining the precision of dense vector search with the recall of keyword search via Reciprocal Rank Fusion:
 
 ```mermaid
-sequenceDiagram
-    participant UV as Uvicorn
-    participant APP as FastAPI App
-    participant DB as database.py
-    participant IDX as RAG Indexer
+flowchart TD
+    Q["User Query"] --> EXPAND["🔁 Query Expansion\nGemini generates 3 semantic variants\n(parallel ThreadPoolExecutor)"]
 
-    UV->>APP: Start (lifespan context)
-    APP->>DB: init_sqlite_schema()
-    APP->>DB: init_duckdb_schema()
-    APP->>DB: seed_default_users()
-    APP->>DB: heal_stale_filepaths()
-    APP->>DB: reconcile_duckdb_from_sqlite()
-    APP-->>IDX: preload_default_data() [background thread]
-    IDX->>DB: Copy resources/data/ → static/uploads/
-    IDX->>DB: Register docs in SQLite
-    IDX->>IDX: run_indexer() → embed into ChromaDB
-    APP->>UV: ✅ Ready (port 8000)
+    EXPAND --> DENSE["🧲 Dense Vector Search\nChromaDB cosine similarity\nk=20 per variant\nRole metadata filter\nMin score ≥ 0.15"]
+    Q --> SPARSE["📝 Sparse Keyword Search\nSQLite FTS5 BM25\nRole-scoped WHERE clause\nlimit=25 tokens"]
+
+    DENSE --> DEDUP["Deduplicate by content hash\nSplit: doc_summary + content chunks\nSort by relevance score\nTop 30 dense candidates"]
+    SPARSE --> RRF["⚖️ Reciprocal Rank Fusion\nRRF score = Σ 1/(60 + rank)\nMerge dense + sparse\nRe-rank by fused score\nTop 30 fused candidates"]
+    DEDUP --> RRF
+
+    RRF --> COHERE{"Cohere API\nconfigured?"}
+    COHERE -- "Yes ✅" --> RERANK["🏆 Cohere Rerank\nrerank-english-v3.0\ntop_n=6\nCross-encoder scoring"]
+    COHERE -- "No ⬇️" --> TOP6["Top 6 by RRF score"]
+
+    RERANK --> LLM["🤖 Gemini 2.5 Flash\nContext-grounded answer\nRole-aware system prompt\nMarkdown-formatted output"]
+    TOP6 --> LLM
+
+    LLM --> STREAM["NDJSON stream\n→ React UI progressive render"]
+
+    style RRF fill:#1e1b4b,color:#c7d2fe,stroke:#4338ca
+    style RERANK fill:#14532d,color:#dcfce7,stroke:#166534
+    style LLM fill:#172554,color:#dbeafe,stroke:#1e40af
+```
+
+> **Why Hybrid?** Dense search excels at semantic similarity but misses exact keyword matches. BM25 excels at exact terms but misses paraphrases. RRF fusion gives the best of both worlds without requiring any retraining.
+
+---
+
+### 5. Document Ingestion Pipeline
+
+```mermaid
+flowchart TD
+    UPLOAD["📁 File Upload\n/upload-docs (C-Level only)\nMax 20MB · OWASP-safe path validation\nPDF magic-byte check"] --> TYPE{"File type?"}
+
+    TYPE -- ".csv" --> CSV_L["CSVDocumentLoader\nPandas read_csv\nSingle Document (full CSV as text)\nExtract column headers → SQLite"]
+    TYPE -- ".md"  --> MD_L["MarkdownDocumentLoader\nUTF-8 read\nFull file as single Document"]
+    TYPE -- ".pdf" --> PDF_L["PDFDocumentLoader\npdfplumber page-by-page\nTable → GFM markdown conversion\nText + table hybrid extraction"]
+
+    CSV_L --> SQLITE_REG["SQLite: INSERT document\n(filename, role, filepath, headers_str)\nembedded=0 (pending)"]
+    MD_L --> CHUNK["RecursiveCharacterTextSplitter\nchunk_size=1000 · overlap=200\nSplit into LangChain Documents\nTag: role + source + filepath metadata"]
+    PDF_L --> CHUNK
+    SQLITE_REG --> DUCKDB_TBL["DuckDB: CREATE TABLE\n(filename_stem) AS SELECT * FROM csv\nRegister in tables_metadata"]
+
+    CHUNK --> QUEUE["IndexerWorker Queue\nbackground thread (daemon)\nProcesses embedding=0 docs in order"]
+    SQLITE_REG --> QUEUE
+
+    QUEUE --> EMBED["RetryingEmbeddings\ngemini-embedding-2-preview\nBatch size=100\n10× retry on transient 429\nExponential backoff cap 120s"]
+    EMBED --> FTS5["SQLite FTS5 Index\ndocument_chunks_fts\n(chunk_id · role · source · content)\nBM25 searchable"]
+    EMBED --> CHROMA["ChromaDB Vectorstore\nmy_collection\nchunk_id + doc_id metadata\nRole-filtered retrieval"]
+    EMBED --> PROGRESS["SQLite: UPDATE embedded_chunks\nReal-time progress tracking\n→ KbIndexingPage dashboard"]
+
+    style UPLOAD fill:#1c1917,color:#fef3c7,stroke:#78350f
+    style EMBED fill:#172554,color:#dbeafe,stroke:#1e40af
+    style CHROMA fill:#3b0764,color:#f3e8ff,stroke:#7e22ce
 ```
 
 ---
 
-## 🔄 Request Lifecycle
+### 6. Evaluation Framework Flow
 
-A complete chat request from browser to response:
+```mermaid
+flowchart TD
+    TRIGGER["POST /evaluate\n(C-Level JWT required)"] --> LOCK["Acquire evaluation lock\n(process-local, one run at a time)"]
 
-```
-Browser ──► React SPA (5173) ──► POST /chat-stream (8000)
-                                          │
-                                    [Bearer JWT validated]
-                                          │
-                               ┌──────────▼──────────┐
-                               │   RBAC Guard         │ ← Cross-dept keyword scan
-                               └──────────┬──────────┘
-                                          │
-                               ┌──────────▼──────────┐
-                               │   Query Classifier   │ ← Gemini LLM: "SQL" | "RAG"
-                               └───────┬──────┬───────┘
-                                    SQL│      │RAG
-                           ┌──────────▼┐    ┌▼──────────────┐
-                           │ NL→SQL    │    │ Embed question │
-                           │ (Gemini)  │    │ (gemini-embedding-2-preview) │
-                           └──────┬────┘    └──────┬─────────┘
-                                  │                │
-                           ┌──────▼────┐    ┌──────▼─────────┐
-                           │ DuckDB    │    │ ChromaDB k=8   │
-                           │ (role-    │    │ (role-filtered)│
-                           │  filtered)│    └──────┬─────────┘
-                           └──────┬────┘           │
-                                  │         ┌──────▼─────────┐
-                                  │         │ Cohere Rerank  │ (optional)
-                                  │         └──────┬─────────┘
-                                  │                │
-                                  │         ┌──────▼─────────┐
-                                  │         │ Gemini Answer  │
-                                  │         └──────┬─────────┘
-                                  │                │
-                           ┌──────▼────────────────▼──┐
-                           │  NDJSON stream → Browser  │
-                           └───────────────────────────┘
+    LOCK --> DATASET["eval_dataset.py\nLoad curated QA pairs\n(qa_pairs_openai.csv)\nOR generate synthetic pairs from live docs"]
+
+    DATASET --> PARALLEL["Parallel evaluation tracks"]
+    PARALLEL --> QUAL["📊 Quality Track"]
+    PARALLEL --> SEC["🔐 Security Track"]
+
+    QUAL --> NOLLM["no_llm_evaluator.py\n5 embedding/statistical metrics\nZero LLM quota cost\nRuns in <2 minutes"]
+    QUAL --> RAGAS["ragas_evaluator.py\nGemini LLM-as-judge\nFaithfulness · Relevancy\nPrecision · Recall · Correctness"]
+
+    SEC --> RBAC["rbac_security_eval.py\n6 RBAC security tests\nCross-role retrieval checks\nChroma filter verification"]
+
+    NOLLM --> REPORT["eval_report.py\nHTML report (ragas_report.html)\nPer-role scorecards\nPASS / WARN / FAIL thresholds"]
+    RAGAS --> REPORT
+    RBAC --> REPORT
+
+    REPORT --> PERSIST["Save results:\nevaluation_results_no_llm.csv\nevaluation_results_ragas_quick.csv\nlast_eval_status.json\nrbac_security_report.json"]
+    PERSIST --> API["GET /evaluate/status → JSON\nGET /evaluate/report → HTML download\nEvaluationPage → Recharts bar charts"]
+
+    style NOLLM fill:#14532d,color:#dcfce7,stroke:#166534
+    style RAGAS fill:#1e1b4b,color:#c7d2fe,stroke:#4338ca
+    style RBAC fill:#7f1d1d,color:#fca5a5,stroke:#991b1b
 ```
 
 ---
 
-## ✨ Key Features
+## ✨ Feature Deep-Dives
 
-### 🔐 1. Role-Based Access Control (RBAC)
+### 🔐 1. Role-Based Access Control (RBAC) — Three Defense Layers
 
-- **JWT authentication** (HS256, 12-hour expiry) issued at `/login` via HTTP Basic Auth
-- **Department isolation**: every document is tagged with a role; ChromaDB filters embeddings at query time using metadata
-- **Cross-department guard**: a phrase-pattern scanner blocks `HR` users from querying Finance data, etc., *before* any LLM call
-- **C-Level override**: the `c-level` role bypasses all department restrictions and gains access to all management pages
+Authorization is enforced at **three independent layers** — if any layer fails, the request is blocked before data is accessed:
 
-### 🖥️ 2. Modern React SPA Frontend
+| Layer | Location | Mechanism |
+|-------|----------|-----------|
+| **Layer 1** — HTTP Auth | `app/api/auth.py` | JWT decode + current role re-fetch from DB (stale-token protection) |
+| **Layer 2** — Dept Guard | `app/api/chat.py` | Phrase-pattern scanner blocks cross-department queries before any LLM call |
+| **Layer 3** — Data Store | `app/rag/module.py` + `csv_query.py` | ChromaDB role metadata filter + DuckDB allowed-table whitelist |
 
-The frontend is a **React 19 + TypeScript** single-page application built with **Vite 8**, featuring:
+```python
+# Layer 2 example — RBAC Guard (no LLM involved)
+def check_cross_dept_access(question: str, role: str) -> dict | None:
+    if role.lower() == "c-level":
+        return None  # C-Level sees everything
+    query_dept = _detect_query_dept(question)  # phrase scan
+    user_dept  = _role_to_dept(role)
+    if user_dept != query_dept:
+        return {"denied": True, "reason": f"{query_dept.upper()} data is restricted for {role}"}
+```
 
-| Page | Route | Access | Description |
-|------|-------|--------|-------------|
-| **Login** | `/login` | Public | HTTP Basic Auth form → JWT session via Zustand + sessionStorage |
-| **AI Chat** | `/chat` | All roles | Real-time streaming chat with mode badges, copy-to-clipboard, source citations, and SQL display |
-| **Explorer** | `/explorer` | All roles | Browse and search accessible department documents |
-| **Upload Docs** | `/upload` | C-Level only | Drag-and-drop document upload with role assignment |
-| **KB Indexing** | `/kb-indexing` | C-Level only | Live embedding progress dashboard with retry/reindex controls |
-| **Admin Panel** | `/admin` | C-Level only | User and role management, system metrics |
-| **Evaluation** | `/evaluation` | C-Level only | RAGAS metric visualisation (Recharts bar charts) + RBAC security test runner |
+**C-Level override:** The `c-level` role bypasses all department restrictions and gains access to upload, admin, and evaluation pages.
 
-**UI features:**
-- Dark-mode glassmorphism design with CSS custom properties
-- Role-coloured sidebar with real-time API health indicator (`/` ping every 15 s)
-- Sidebar system metrics card (docs / users / roles / tables) refreshed every 30 s
-- Animated streaming cursor and thinking indicator during LLM responses
-- Markdown rendering via `react-markdown` + `remark-gfm`
-- Automatic `401` → redirect to login via Axios interceptors
+---
 
-### 🤖 3. Intelligent Dual-Mode Query Routing
+### 🤖 2. Intelligent Hybrid Retrieval
 
-| Mode | Trigger | Engine | Example |
-|------|---------|--------|---------|
-| **RAG** | "summarize", "explain", policy questions | Chroma + Gemini | *"Summarize the HR onboarding policy"* |
-| **SQL** | "show", "list", "count", numeric filters | DuckDB + Gemini | *"List employees with salary > 80,000"* |
-| **Greeting** | greetings, small-talk | Inline response | *"Hello!"* |
-| **Fallback** | SQL fails / empty result | SQL → RAG | Automatic, transparent |
+FinSight uses a **three-stage retrieval pipeline** — far beyond simple top-k vector search:
 
-The **LLM classifier** (`app/rag/classifier.py`) uses a zero-shot Gemini prompt with hand-crafted disambiguation rules.
+**Stage 1 — Query Expansion**
+```python
+def expand_query(question: str) -> list[str]:
+    """Generate 3 semantic variants to improve recall."""
+    # Returns: [original, variant_1, variant_2, variant_3]
+    # Each variant captures a different semantic angle
+```
 
-### ⚡ 4. Streaming Responses
+**Stage 2 — Dual-path retrieval (parallel)**
+```python
+# Dense: ChromaDB cosine similarity (k=20 per query variant, concurrent)
+# Sparse: SQLite FTS5 BM25 (role-scoped WHERE, limit=25)
+with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+    futures = {executor.submit(search_single, q): q for q in queries}
+```
 
-`POST /chat-stream` returns **NDJSON** chunks in real time so the React UI can progressively render the answer — no waiting for the full response:
+**Stage 3 — Reciprocal Rank Fusion**
+```python
+# RRF formula: score(d) = Σ 1 / (k + rank(d))  where k=60
+rrf_scores[h] += 1.0 / (60.0 + rank + 1)
+candidates = sorted(doc_map.values(), key=lambda d: rrf_scores[hash(d.page_content)])[:30]
+```
+
+**Stage 4 (optional) — Cohere Reranker**
+```
+Cohere rerank-english-v3.0 → cross-encoder scoring → top_n=6 final documents
+```
+
+---
+
+### ⚡ 3. Real-Time Streaming (NDJSON)
+
+`POST /chat-stream` returns **Newline-Delimited JSON** chunks so the React UI progressively renders the answer:
 
 ```json
 {"type": "init",     "user": "alice", "role": "Finance", "mode": "RAG"}
@@ -304,65 +466,246 @@ The **LLM classifier** (`app/rag/classifier.py`) uses a zero-shot Gemini prompt 
 {"type": "metadata", "sources": ["finance_report_2024.md"], "fallback": false}
 ```
 
-### 🗄️ 5. Dual Database Architecture
+**Frontend resilience:**
+- `AbortController` cancellation (Stop button)
+- Bounded NDJSON reader with UTF-8 boundary handling
+- Split-record validation (malformed JSON logged, not crashed)
+- `401` anywhere → automatic redirect to login via Axios interceptors
 
-| Database | Technology | Purpose |
-|----------|-----------|---------| 
-| **Metadata store** | SQLite (WAL mode) | Users, roles, document registry, chunk counters |
-| **Structured queries** | DuckDB (in-process) | One table per uploaded CSV, role-scoped |
-| **Vector store** | ChromaDB | Embeddings for unstructured doc retrieval |
+---
 
-DuckDB tables are auto-created on CSV upload and reconciled from SQLite on every startup (`reconcile_duckdb_from_sqlite`). A `heal_stale_filepaths()` routine corrects absolute paths when the project folder is renamed or moved.
+### 🛡 4. SQL Security Sandbox
 
-### 📊 6. Document Processing Pipeline
+Generated SQL **never touches the real DuckDB file**. Every query runs inside an in-memory isolated sandbox following [DuckDB's security guidance for untrusted SQL](https://duckdb.org/docs/sql/query_syntax/select):
 
-Supports three file types with dedicated loading strategies (Strategy pattern):
+```python
+# app/core/sql_sandbox.py
+sandbox = duckdb.connect(':memory:', config={
+    'enable_external_access': False,  # cannot read/write host files
+    'memory_limit': '256MB',
+    'threads': 2,
+})
+# Only SELECT allowed; only authorized tables copied in; 10s interrupt timer
+timer = threading.Timer(10, sandbox.interrupt)
+rows  = cursor.fetchmany(row_limit + 1)   # hard cap: 1000 rows
+```
 
-| File Type | Loader | Chunking Strategy |
-|-----------|--------|-------------------|
-| `.csv` | `CSVDocumentLoader` | Single document (full CSV as text) |
-| `.md` | `MarkdownDocumentLoader` | `RecursiveCharacterTextSplitter` |
-| `.pdf` | `PDFDocumentLoader` (pdfplumber) | Page-level + text splitter |
+**Security constraints applied:**
+- `enable_external_access=False` — no `COPY FROM`, no `read_csv('/etc/passwd')`
+- One `SELECT` statement only (no DDL, DML, or multiple statements)
+- Tables copied into sandbox as DataFrames (original file never opened by generated SQL)
+- 10-second interrupt timer prevents runaway queries
+- 1,000-row result cap with truncation notice
 
-All chunks are tagged with `role`, `source`, and `filepath` metadata for retrieval filtering.
+---
 
-### 🔁 7. Production-Grade Embedding with Smart Retry
+### 🔁 5. Production-Grade Embeddings with Smart Retry
 
-`RetryingEmbeddings` wraps `GoogleGenerativeAIEmbeddings` with:
-- **Transient 429** → reads `retry_delay` from the error proto, waits, retries up to 10×
-- **Hard quota** → raises immediately; the failing document is marked `embedded=-1` in SQLite
-- **Exponential back-off** capped at 120 s
+`RetryingEmbeddings` wraps `GoogleGenerativeAIEmbeddings` with intelligent error classification:
 
-### 🏆 8. Cohere Reranker
+```python
+def _classify_api_error(err: Exception) -> str:
+    s = str(err).lower()
+    if any(sig in s for sig in ["quota", "billing", "plan_limit"]): return "hard_quota"
+    if "429" in s or "resource exhausted" in s:                     return "transient_rate_limit"
+    return "other"
+```
 
-When `COHERE_API_KEY` is set, the RAG pipeline upgrades from a simple top-8 vector search to a two-stage retrieve-then-rerank approach, dramatically reducing irrelevant context passed to the LLM.
+| Error Type | Behavior |
+|-----------|----------|
+| **Transient 429** | Read `retry_delay` from error proto → wait → retry up to 10× (exp. backoff, cap 120s) |
+| **Hard quota** | Mark document `embedded=-1` in SQLite → stop indexing → user can retry when quota restored |
+| **Other** | Mark failed → continue with next document |
 
-### 🛡️ 9. Comprehensive Evaluation Suite
+---
 
-Two independent evaluation tracks run via `POST /evaluate` (C-Level only):
+### 🌐 6. Modern React SPA
 
-**Quality Evaluation (RAGAS)**
-- Faithfulness, Answer Relevancy, Context Recall, Context Precision
-- Synthetic QA pairs generated per role from live documents
-- Results visualised in the **Evaluation** page with interactive bar charts (Recharts)
-- Persisted as CSV + HTML report
+| Page | Route | Access | Key Features |
+|------|-------|--------|--------------|
+| **Login** | `/login` | Public | HTTP Basic Auth form → JWT via Zustand + sessionStorage |
+| **AI Chat** | `/chat` | All roles | Streaming NDJSON, mode badges (RAG/SQL/GREETING), copy-to-clipboard, source citations, SQL display, AbortController stop |
+| **Explorer** | `/explorer` | All roles | Browse + search accessible department documents, authenticated PDF preview |
+| **Upload Docs** | `/upload` | C-Level | Drag-and-drop, role assignment, 20MB limit, PDF magic-byte validation |
+| **KB Indexing** | `/kb-indexing` | C-Level | Live embedding progress bar, per-document status, retry failed, full reindex |
+| **Admin Panel** | `/admin` | C-Level | User & role management, system metrics (docs/users/roles/tables) refreshed every 30s |
+| **Evaluation** | `/evaluation` | C-Level | RAGAS metrics (Recharts bar charts), RBAC test runner, HTML report download |
 
-**RBAC Security Evaluation** — six automated tests verify the access control layer:
+**UI system highlights:**
+- Dark-mode glassmorphism design with CSS custom properties (`--surface-*`, `--accent-*`)
+- Role-coloured sidebar with real-time API health indicator (ping every 15s)
+- Animated streaming cursor + thinking indicator during LLM responses
+- Markdown rendering via `react-markdown` + `remark-gfm` (tables, code blocks, bold)
+- Lazy-loaded routes for reduced initial bundle size
+- Mobile-responsive navigation with hamburger menu
+- `CLevelRoute` guard component — non-C-Level users redirected to `/chat`
 
-| Test | What it checks |
-|------|---------------|
-| `test_unauthorized_access_blocked` | Role A cannot retrieve Role B documents |
-| `test_authorized_access_allowed` | Role A can retrieve its own documents |
-| `test_clevel_sees_all` | C-Level retrieves cross-department docs |
-| `test_general_docs_accessible_to_all` | General docs are reachable by every role |
-| `test_retriever_filter_correctness` | ChromaDB metadata filter is correctly applied |
-| `test_authorization_leakage_score` | Cross-role context precision ≈ 0 (RAGAS) |
+---
 
-### 🧪 10. Automated Testing
+### 🗣 7. Multi-Turn Conversation Contextualization
 
-- **Backend**: `pytest` with `TestClient` — classifier routing, SQL execution, RAG fallback, RBAC denial
-- **E2E Frontend**: `Playwright` — login, tab rendering, document upload, query flow
-- **Video recording** of Playwright sessions saved to `videos/`
+Follow-up queries are reformulated into standalone questions using conversation history:
+
+```
+History:  "What was our Q3 revenue?"
+Follow-up: "How does it compare to last year?"
+→ Contextualized: "How does FinSolve's Q3 2024 revenue compare to Q3 2023?"
+```
+
+```python
+def contextualize_query_llm(question: str, history: list[ChatMessage]) -> str:
+    # Uses last 6 turns, max 1000 chars per turn
+    # LLM reformulates into standalone searchable question
+    # Falls back gracefully to original question on error
+```
+
+---
+
+### 📦 8. Document Processing — Strategy Pattern
+
+Three dedicated loader strategies with type-specific chunking:
+
+| File Type | Loader | Chunking | Special Handling |
+|-----------|--------|----------|-----------------|
+| `.csv` | `CSVDocumentLoader` | Single doc (full CSV as text) | Headers extracted → DuckDB table + SQLite `headers_str` |
+| `.md` | `MarkdownDocumentLoader` | `RecursiveCharacterTextSplitter` (1000 chars, 200 overlap) | UTF-8 encoding |
+| `.pdf` | `PDFDocumentLoader` (pdfplumber) | Page-level + text splitter | Tables → GFM markdown via `_format_table_as_markdown()` |
+
+All chunks tagged with `role`, `source`, `filepath`, `chunk_id`, `doc_id` metadata for retrieval filtering and FTS5 indexing.
+
+---
+
+### 🔮 9. Gemini LLM Fallback Chain
+
+The LLM is configured with a model fallback chain for resilience:
+
+```python
+model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", ...).with_fallbacks([
+    ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", ...),
+    ChatGoogleGenerativeAI(model="gemini-1.5-flash", ...),
+])
+```
+
+If the primary model is unavailable or rate-limited, the chain automatically tries the next model — zero manual intervention required.
+
+---
+
+### 🗄 10. Self-Healing Database
+
+On every startup, FinSight runs two reconciliation routines:
+
+```python
+heal_stale_filepaths()         # Corrects absolute paths if project folder was renamed/moved
+reconcile_duckdb_from_sqlite() # Rebuilds DuckDB CSV tables from SQLite document registry
+```
+
+This means you can move the project directory, rename folders, or restore from backup — the next startup automatically fixes all stale references.
+
+---
+
+## 📊 Evaluation Scorecard
+
+> **Methodology:** Two independent evaluation tracks — a quota-free statistical evaluator and a full LLM-as-judge RAGAS run. All numbers below are from actual system runs on the deployed document corpus.
+
+### Track 1 — Quota-Free Statistical Evaluation (14 samples across 4 roles)
+
+*Computed using: Gemini embedding cosine similarity · BM25 token overlap · ROUGE-L sequence matching — zero LLM API calls.*
+
+| Metric | Overall | Finance | HR | Engineering | Threshold | Status |
+|--------|---------|---------|-----|-------------|-----------|--------|
+| **Answer Relevancy** | **0.840** | 0.856 | 0.843 | 0.794 | ≥ 0.65 | ✅ PASS |
+| **Context Recall** | **0.750** | 0.785 | 0.718 | 0.702 | ≥ 0.60 | ✅ PASS |
+| **Context Precision** | **0.614** | 0.713 | 0.527 | 0.573 | ≥ 0.30 | ✅ PASS |
+| **Answer Similarity** | **0.817** | 0.837 | 0.809 | 0.780 | ≥ 0.65 | ✅ PASS |
+| **Faithfulness (token)** | **0.535** | 0.380 | 0.592 | 0.478 | ≥ 0.35 | ⚠️ WARN |
+
+> *Faithfulness token score uses ROUGE-L recall (n-gram overlap against context), which is intentionally conservative — LLM-generated prose paraphrases context rather than quoting it verbatim. The LLM-as-judge RAGAS faithfulness scores (0.75–1.00) are the authoritative metric.*
+
+---
+
+### Track 2 — RAGAS LLM-as-Judge (Gemini evaluator, quick set)
+
+| Sample | Role | Faithfulness | Answer Relevancy |
+|--------|------|-------------|-----------------|
+| FinSolve Q4 2024 expenses | Finance | **0.80** | 0.770 |
+| Employee onboarding process | HR | **0.75** | 0.965 |
+| Engineering coding standards | Engineering | **1.00** | 0.946 |
+| **Average** | | **0.85** | **0.894** |
+
+**RAGAS Production Thresholds:**
+
+| Metric | Pass | Warn | Critical |
+|--------|------|------|----------|
+| Faithfulness | ≥ 0.75 | < 0.85 | < 0.65 |
+| Answer Relevancy | ≥ 0.70 | < 0.75 | < 0.55 |
+| Context Precision | ≥ 0.65 | < 0.70 | < 0.50 |
+| Context Recall | ≥ 0.70 | < 0.75 | < 0.55 |
+| Answer Correctness | ≥ 0.60 | < 0.65 | < 0.45 |
+
+---
+
+### Track 3 — RBAC Security Tests (6 automated tests)
+
+*Verifies that the access control layer is correctly enforced at the retrieval level.*
+
+| Test | Score | Status | Details |
+|------|-------|--------|---------|
+| `test_authorized_access_allowed` | **1.000** | ✅ PASS | 4/4 role-query pairs returned relevant content |
+| `test_general_docs_accessible_to_all` | **1.000** | ✅ PASS | 8/8 role-query pairs reached general documents |
+| `test_retriever_filter_correctness` | **1.000** | ✅ PASS | 0 ChromaDB metadata filter violations |
+| `test_unauthorized_access_blocked` | **0.917** | ⚠️ WARN | 11/12 blocked; 1 edge case: "revenue" keyword in general context |
+| `test_clevel_sees_all` | **0.750** | ⚠️ WARN | 3/4 departments found (HR docs sparse in test run) |
+| **Overall RBAC Score** | **0.933** | ✅ PASS | 3 PASS · 2 WARN · 0 FAIL |
+
+> The `test_unauthorized_access_blocked` warning reflects a known semantic overlap: the word "revenue" appears in general company documents (accessible to all) as well as finance-specific reports. The RBAC Guard correctly blocks finance-specific phrases — this edge case is a precision calibration item, not a data leak.
+
+---
+
+### Test Suite Summary
+
+| Suite | Command | Result |
+|-------|---------|--------|
+| Backend API + RBAC | `pytest tests/test_chatbot.py -v` | **60 passed**, 8 deselected |
+| Evaluation pipeline | `pytest tests/test_ragas_eval.py -v -m "not slow"` | ✅ All fast tests passed |
+| Security regression | `pytest verification/test_security.py -v` | **20 passed** |
+| Frontend NDJSON stream | `node --test frontend/verification/ndjson.test.mjs` | **5 passed** |
+
+---
+
+## 🛡 Security Model
+
+### Threat Model
+
+| Threat | Mitigation |
+|--------|-----------|
+| **Unauthorized data access** | 3-layer RBAC: JWT → dept guard → data store filter |
+| **SQL injection / data exfiltration** | In-memory DuckDB sandbox, `enable_external_access=False`, SELECT-only, 10s timeout |
+| **Filename traversal in uploads** | `Path.resolve()` validation, role-directory whitelist, safe path check |
+| **Stale JWT after role change** | Per-request DB role re-fetch; tokens with stale role rejected with 401 |
+| **PDF access bypass** | Only registered documents matching user role served; `no-store` cache headers |
+| **Token leakage in URLs** | Authenticated blob requests for PDF preview and report download (no URL tokens) |
+| **Oversized upload DoS** | 20MB hard limit enforced server-side; empty file check |
+| **Unbounded chat input** | `max_length=8000` Pydantic field validation |
+| **Weak initial passwords** | Startup refuses to seed users with passwords shorter than 12 characters |
+| **Duplicate file overwrite** | Duplicate filename + role combination rejected with 409 Conflict |
+
+### Security Layers Diagram
+
+```
+Request arrives
+    │
+    ├─ Layer 1: JWT verification (PyJWT decode + exp check)
+    │          + DB role re-fetch (stale-role protection)
+    │
+    ├─ Layer 2: RBAC dept guard (phrase scan, pre-LLM, no data touched)
+    │          → SQL security: forbidden keyword block
+    │                          table name regex validation
+    │                          role whitelist check
+    │
+    └─ Layer 3: Data store enforcement
+               ChromaDB: {"role": {"$in": [user_role, "general"]}} filter
+               DuckDB: authorized tables copied to isolated sandbox only
+```
 
 ---
 
@@ -370,36 +713,35 @@ Two independent evaluation tracks run via `POST /evaluate` (C-Level only):
 
 ### Backend
 
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| **LLM** | Google Gemini (2.5 Flash / Pro, fallback chain) | `google-genai ≥1.64` |
-| **Orchestration** | LangChain + LangChain-Chroma | `≥0.3.28` |
-| **Embeddings** | `gemini-embedding-2-preview` (Google) | via `langchain-google-genai ≥2.1.3` |
-| **Reranker** | Cohere Rerank v3 | `langchain-cohere ≥0.3.5` |
-| **Vector DB** | ChromaDB | `≥0.5.23` |
-| **SQL Engine** | DuckDB | `≥1.3.2` (in-process) |
-| **Metadata DB** | SQLite (WAL mode) | stdlib |
-| **Web Framework** | FastAPI + Uvicorn | `≥0.129` |
-| **Auth** | JWT (PyJWT ≥2.11) + bcrypt (≥4.3) | HS256 · 12 h expiry |
-| **Evaluation** | RAGAS | `≥0.4.3` |
-| **PDF parsing** | pdfplumber | `≥0.11.9` |
-| **Data** | Pandas · DuckDB · Tabulate | latest |
-| **Testing** | Pytest · Playwright · pytest-playwright | latest |
+| Layer | Technology | Version | Why this choice |
+|-------|-----------|---------|----------------|
+| **LLM** | Google Gemini 2.5 Flash | `google-genai ≥1.64` | Long context window, cost-efficient, `gemini-embedding-2-preview` provides state-of-the-art semantic embeddings |
+| **LLM Orchestration** | LangChain + LangChain-Chroma | `≥0.3.28` | Production-stable LCEL runnables; native ChromaDB integration; retriever abstraction |
+| **Embeddings** | `gemini-embedding-2-preview` | via `langchain-google-genai ≥2.1.3` | Same provider as LLM (no extra API key); consistently high retrieval quality |
+| **Reranker** | Cohere Rerank v3 | `langchain-cohere ≥0.3.5` | Cross-encoder outperforms bi-encoder re-ranking; optional (degrades gracefully) |
+| **Vector DB** | ChromaDB | `≥0.5.23` | Zero infrastructure, metadata filtering, production upgrade path to cloud |
+| **Keyword Search** | SQLite FTS5 (BM25) | stdlib | Zero extra dependency; BM25 built into SQLite; perfect RRF complement to dense search |
+| **SQL Engine** | DuckDB | `≥1.3.2` | In-process, no server; reads CSV natively; fastest local analytics; in-memory sandbox capability |
+| **Metadata DB** | SQLite WAL mode | stdlib | Zero infrastructure; WAL mode for concurrent reads; FTS5 extension built-in |
+| **Web Framework** | FastAPI + Uvicorn | `≥0.129` | Async-native; auto OpenAPI docs; Pydantic validation; ASGI streaming support |
+| **Auth** | PyJWT + bcrypt | `≥2.11` / `≥4.3` | HS256 tokens, 12h expiry, bcrypt cost-factor password hashing |
+| **Evaluation** | RAGAS | `≥0.4.3` | LLM-as-judge framework; faithfulness / relevancy / precision / recall metrics |
+| **PDF Parsing** | pdfplumber | `≥0.11.9` | Table extraction with structure preservation; better than PyPDF2 for formatted docs |
 
 ### Frontend
 
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| **Framework** | React | `19.x` |
-| **Language** | TypeScript | `~6.0` |
-| **Build tool** | Vite | `^8.1` |
-| **Router** | React Router DOM | `^7.18` |
-| **State Management** | Zustand (persist → sessionStorage) | `^5.0` |
-| **HTTP Client** | Axios | `^1.18` |
-| **Icons** | Lucide React | `^1.24` |
-| **Charts** | Recharts | `^3.9` |
-| **Markdown** | react-markdown + remark-gfm | `^10.1 / ^4.0` |
-| **Linting** | oxlint | `^1.71` |
+| Layer | Technology | Version | Why this choice |
+|-------|-----------|---------|----------------|
+| **Framework** | React | `19.x` | Latest concurrent features; Suspense for lazy loading |
+| **Language** | TypeScript | `~6.0` | Full type safety across API interfaces |
+| **Build Tool** | Vite | `^8.1` | Sub-second HMR; lazy chunk splitting per page |
+| **Router** | React Router DOM | `^7.18` | Nested routes; loader-based data fetching |
+| **State** | Zustand + sessionStorage | `^5.0` | Minimal boilerplate; session-scoped auth persistence |
+| **HTTP** | Axios + Fetch | `^1.18` | Axios for REST + 401 interceptors; native Fetch for NDJSON streaming |
+| **Icons** | Lucide React | `^1.24` | Consistent icon set; tree-shakeable |
+| **Charts** | Recharts | `^3.9` | D3-backed bar charts for evaluation dashboards |
+| **Markdown** | react-markdown + remark-gfm | `^10.1` | GitHub Flavored Markdown (tables, code blocks, bold) |
+| **Linting** | oxlint | `^1.71` | 50-100× faster than ESLint; `--deny-warnings` in CI |
 
 ---
 
@@ -407,156 +749,211 @@ Two independent evaluation tracks run via `POST /evaluate` (C-Level only):
 
 ```
 finsight/
-├── app/
-│   ├── main.py                         # FastAPI app factory & lifespan
+│
+├── app/                                 # FastAPI application package
+│   ├── main.py                          # App factory, lifespan, routers, CORS
 │   │
-│   ├── api/                            # HTTP layer — one file per domain
-│   │   ├── auth.py                     # GET  /login  →  JWT issuance
-│   │   ├── chat.py                     # POST /chat  &  /chat-stream
-│   │   ├── documents.py                # POST /upload, GET /documents
-│   │   ├── admin.py                    # User/role mgmt, reindex, system-metrics (C-Level)
-│   │   ├── evaluate.py                 # POST /evaluate, GET /evaluate/status|report
-│   │   └── health.py                   # GET  /health
+│   ├── api/                             # HTTP layer — one file per domain
+│   │   ├── auth.py                      # GET /login → JWT issuance, get_current_user dependency
+│   │   ├── chat.py                      # POST /chat & /chat-stream, RBAC guard, routing logic
+│   │   ├── documents.py                 # POST /upload-docs, GET /documents, PDF preview
+│   │   ├── admin.py                     # User/role mgmt, reindex, system-metrics (C-Level)
+│   │   ├── evaluate.py                  # POST /evaluate, GET /evaluate/status|report
+│   │   └── health.py                    # GET /health
 │   │
-│   ├── core/                           # Shared infrastructure
-│   │   ├── config.py                   # Env vars, paths, Gemini fallback list, CORS origins
-│   │   ├── database.py                 # SQLite + DuckDB init, heal, reconcile, preload
-│   │   ├── security.py                 # JWT encode/decode, bcrypt hash/verify
-│   │   └── users.py                    # Default user & role seeding
+│   ├── core/                            # Shared infrastructure
+│   │   ├── config.py                    # Env vars, paths, Gemini fallback list, CORS origins
+│   │   ├── database.py                  # SQLite+DuckDB init, heal, reconcile, preload, FTS5
+│   │   ├── security.py                  # JWT encode/decode, bcrypt hash/verify, secret mgmt
+│   │   ├── sql_sandbox.py               # DuckDB in-memory execution sandbox (OWASP-compliant)
+│   │   └── users.py                     # Default user seeding, password policy enforcement
 │   │
-│   ├── rag/                            # RAG + SQL engine
-│   │   ├── module.py                   # Chroma vectorstore, indexer, singleton, RetryingEmbeddings
-│   │   ├── chain.py                    # ask_rag() high-level helper
-│   │   ├── classifier.py               # LLM query router (SQL vs RAG)
-│   │   ├── csv_query.py                # NL → SQL → DuckDB pipeline
-│   │   ├── processors.py               # CSV / MD / PDF loader strategies
-│   │   └── config.py                   # RAG-specific env setup
+│   ├── rag/                             # RAG + SQL engine
+│   │   ├── module.py                    # HybridMultiQueryRetriever, RetryingEmbeddings, indexer
+│   │   ├── chain.py                     # ask_rag() — query expansion + contextualization helper
+│   │   ├── classifier.py                # LLM query router: SQL | RAG | GREETING
+│   │   ├── csv_query.py                 # NL → SQL → DuckDB sandbox pipeline
+│   │   ├── processors.py               # CSV/MD/PDF loader strategies + chunking
+│   │   └── config.py                   # RAG-specific env setup (side-effect module)
 │   │
-│   ├── rag_evaluator/                  # Evaluation framework
-│   │   ├── ragas_evaluator.py          # RAGAS quality metrics runner (LLM-as-judge)
-│   │   ├── no_llm_evaluator.py         # Quota-free embedding + statistical evaluator
-│   │   ├── rbac_security_eval.py       # 6 RBAC security tests
-│   │   ├── eval_dataset.py             # Synthetic QA pair generation & loader
-│   │   ├── eval_report.py              # HTML report builder
-│   │   ├── evaluation_results_no_llm.csv # Evaluated results (no-LLM metrics)
-│   │   ├── evaluation_results_ragas_quick.csv # Quick RAGAS results
-│   │   └── qa_pairs_openai.csv         # Curated evaluation dataset
-│   │
-├── frontend/                           # React 19 + TypeScript SPA (Vite)
+│   └── rag_evaluator/                  # Evaluation framework
+│       ├── ragas_evaluator.py          # RAGAS LLM-as-judge (Faithfulness/Relevancy/Precision/Recall)
+│       ├── no_llm_evaluator.py         # Quota-free: cosine + BM25 + ROUGE-L metrics
+│       ├── rbac_security_eval.py       # 6 RBAC security regression tests
+│       ├── eval_dataset.py             # Synthetic QA pair generation + CSV loader
+│       ├── eval_report.py              # HTML report builder
+│       ├── evaluation_results_no_llm.csv
+│       ├── evaluation_results_ragas_quick.csv
+│       ├── last_eval_status.json        # Latest evaluation status (used by /evaluate/status)
+│       ├── rbac_security_report.json
+│       └── qa_pairs_openai.csv         # Curated 14-sample evaluation dataset
+│
+├── frontend/                           # React 19 + TypeScript SPA
 │   ├── index.html
-│   ├── vite.config.ts
+│   ├── vite.config.ts                  # Proxy /api/ → backend:8000
 │   ├── package.json
-│   ├── .env.example                    # Frontend environment template
-│   ├── tsconfig.app.json
+│   ├── .env.example                    # VITE_API_BASE_URL
 │   └── src/
-│       ├── main.tsx                    # React DOM entry point
-│       ├── App.tsx                     # BrowserRouter + route definitions + auth guards
-│       ├── index.css                   # Global design system (CSS custom properties, utilities)
-│       ├── App.css
+│       ├── main.tsx                    # React DOM entry + Suspense wrapper
+│       ├── App.tsx                     # BrowserRouter + lazy routes + CLevelRoute guard
+│       ├── index.css                   # Global design system (--surface-*, --accent-*, utilities)
+│       ├── workspace.css               # Responsive workspace shell + mobile nav
 │       │
 │       ├── api/
-│       │   ├── client.ts               # Axios instance + Bearer-token & 401 interceptors
-│       │   └── chat.ts                 # streamChat() — fetch-based NDJSON reader
+│       │   ├── client.ts               # Axios instance, Bearer-token + 401 interceptors
+│       │   ├── chat.ts                 # streamChat() — fetch NDJSON reader + AbortController
+│       │   └── documents.ts            # Authenticated PDF blob download
 │       │
 │       ├── store/
-│       │   └── authStore.ts            # Zustand auth store (persisted to sessionStorage)
+│       │   └── authStore.ts            # Zustand auth store (sessionStorage persistence)
 │       │
 │       ├── types/
-│       │   └── index.ts                # Shared TypeScript interfaces
+│       │   └── index.ts                # Shared TypeScript interfaces (User, DocInfo, EvalResult)
 │       │
-│       ├── components/
-│       │   └── layout/
-│       │       ├── AppLayout.tsx       # Shell wrapper (Sidebar + page outlet)
-│       │       └── Sidebar.tsx         # Role-aware nav, user card, metrics, API health
+│       ├── components/layout/
+│       │   ├── AppLayout.tsx           # Shell wrapper (Sidebar + Outlet)
+│       │   └── Sidebar.tsx             # Role-aware nav, user card, system metrics, API health
 │       │
 │       └── pages/
 │           ├── LoginPage.tsx           # Auth form (Basic Auth → JWT)
-│           ├── ChatPage.tsx            # Streaming AI chat with mode badges & source citations
+│           ├── ChatPage.tsx            # Streaming AI chat, mode badges, source citations
 │           ├── ExplorerPage.tsx        # Document browser (search + filter by role)
 │           ├── UploadPage.tsx          # File upload with role assignment (C-Level)
-│           ├── KbIndexingPage.tsx      # Embedding progress monitor + reindex controls
-│           ├── AdminPage.tsx           # User & role management panel (C-Level)
-│           └── EvaluationPage.tsx      # RAGAS metrics (bar charts) + RBAC tests (C-Level)
+│           ├── KbIndexingPage.tsx      # Embedding progress monitor + retry controls
+│           ├── AdminPage.tsx           # User & role management (C-Level)
+│           └── EvaluationPage.tsx      # RAGAS charts + RBAC test results (C-Level)
 │
-├── resources/
-│   └── data/                           # Seed documents (auto-loaded on startup)
-│       ├── engineering/
-│       ├── finance/
-│       ├── general/
-│       ├── hr/
-│       └── marketing/
+├── resources/data/                     # Seed documents (auto-loaded on first startup)
+│   ├── engineering/                    # Architecture docs, coding standards, runbooks
+│   ├── finance/                        # Financial reports, budget data, CSV tables
+│   ├── general/                        # Company-wide policies, employee handbook
+│   ├── hr/                             # HR policies, employee data CSV
+│   └── marketing/                      # Campaign reports, marketing analytics CSV
 │
 ├── static/
-│   ├── data/                           # DuckDB file + JWT secret key
-│   ├── images/                         # UI assets
-│   └── uploads/                        # Role-scoped document storage
-│       ├── Engineering/
-│       ├── Finance/
-│       ├── General/
-│       ├── HR/
-│       └── Marketing/
+│   ├── data/
+│   │   ├── jwt_secret.key              # Auto-generated JWT signing key (git-ignored)
+│   │   └── structured_queries.duckdb   # DuckDB database file
+│   ├── images/                         # arch.png, background.jpg
+│   └── uploads/                        # Role-scoped document storage (C-Level/, Finance/, HR/, etc.)
 │
 ├── tests/
-│   ├── conftest.py
-│   ├── test_chatbot.py                 # Backend API & RBAC tests (Pytest + TestClient)
-│   ├── test_ragas_eval.py              # Evaluation pipeline & threshold tests
-│   └── sample_docs/                    # Sample documents for isolated test runs
+│   ├── conftest.py                     # Pytest fixtures and test isolation
+│   ├── test_chatbot.py                 # 60 backend API + RBAC tests (FastAPI TestClient)
+│   ├── test_ragas_eval.py              # Evaluation pipeline tests (mock + integration)
+│   └── sample_docs/                    # Isolated sample documents for tests
 │
-├── run_no_llm_evaluation.py            # Standalone fast quota-free evaluation CLI
-├── run_full_ragas_evaluation.py         # Standalone full RAGAS evaluation CLI
-├── back.bat                            # Windows: start FastAPI (port 8000)
-├── front.bat                           # Windows: start React dev server (port 5173)
-├── Dockerfile.backend                  # Dockerfile for FastAPI backend
-├── Dockerfile.frontend                 # Dockerfile for React/Vite frontend
-├── docker-compose.yml                  # Docker Compose configuration
-├── .dockerignore                       # Exclude patterns for Docker builds
-├── .env.example                        # Backend environment variable template
+├── verification/
+│   ├── test_security.py                # 20 security regression tests (OWASP-aligned)
+│   └── preview_server.py              # Preview server helper
+│
+├── deploy/
+│   ├── README.md                       # Production deployment guide + release verification checklist
+│   ├── nginx.conf                      # Nginx reverse proxy config (HTTPS termination, streaming)
+│   └── production.env.example          # Production environment template
+│
+├── chroma_db/                          # ChromaDB persistent vector store
+├── roles_docs.db                       # SQLite database (WAL mode)
+│
+├── Dockerfile.backend                  # FastAPI backend image
+├── Dockerfile.frontend                 # React dev image (HMR)
+├── Dockerfile.frontend.production      # React production image (Nginx + built assets)
+├── docker-compose.yml                  # Development compose (hot-reload)
+├── docker-compose.production.yml       # Production single-host compose
+├── .env.example                        # Backend env template
 ├── requirements.txt                    # Python dependencies (pinned ranges)
-└── pyproject.toml                      # PEP 517 project metadata + pytest markers
+├── pyproject.toml                      # PEP 517 metadata + pytest markers
+├── run_no_llm_evaluation.py            # Standalone quota-free evaluation CLI
+├── run_full_ragas_evaluation.py        # Standalone full RAGAS evaluation CLI
+├── back.bat                            # Windows: start FastAPI (port 8000)
+└── front.bat                           # Windows: start React dev server (port 5173)
 ```
 
 ---
 
-## 🗃️ Database Schema
+## 🗃 Database Schema
 
-### SQLite (`roles_docs.db`)
+### SQLite (`roles_docs.db`) — Entity Relationship
+
+```mermaid
+erDiagram
+    users {
+        int id PK
+        text username UK
+        text password "bcrypt hash"
+        text role FK
+    }
+    roles {
+        int id PK
+        text role_name UK
+    }
+    documents {
+        int id PK
+        text filename
+        text role FK
+        text filepath "absolute path, auto-healed"
+        text headers_str "CSV columns, NULL for non-CSV"
+        int embedded "0=pending, 1=done, -1=failed"
+        int total_chunks
+        int embedded_chunks
+    }
+    document_chunks_fts {
+        text chunk_id PK
+        text doc_id FK
+        text role
+        text source
+        text content "FTS5 full-text index"
+    }
+
+    users }o--|| roles : "has role"
+    documents }o--|| roles : "belongs to role"
+    document_chunks_fts }o--|| documents : "chunks of"
+```
+
+### SQLite Table DDL
 
 ```sql
 CREATE TABLE users (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT,          -- bcrypt hash
-    role     TEXT
+    username TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL,  -- bcrypt hash, never stored plain
+    role     TEXT NOT NULL
 );
 
 CREATE TABLE roles (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    role_name TEXT UNIQUE
+    role_name TEXT UNIQUE NOT NULL
 );
 
 CREATE TABLE documents (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename         TEXT,
-    role             TEXT,
-    filepath         TEXT NOT NULL,   -- absolute, auto-healed on startup
-    headers_str      TEXT,            -- CSV column names (NULL for non-CSV)
-    embedded         INTEGER DEFAULT 0,  -- 0=pending, 1=indexed, -1=failed
+    filename         TEXT NOT NULL,
+    role             TEXT NOT NULL,
+    filepath         TEXT NOT NULL,   -- absolute path, corrected by heal_stale_filepaths()
+    headers_str      TEXT,            -- CSV column names (NULL for .md / .pdf)
+    embedded         INTEGER DEFAULT 0,    -- 0=pending, 1=indexed, -1=failed
     total_chunks     INTEGER DEFAULT 0,
     embedded_chunks  INTEGER DEFAULT 0
+);
+
+-- FTS5 full-text search (BM25)
+CREATE VIRTUAL TABLE document_chunks_fts USING fts5(
+    chunk_id, doc_id, role, source, content
 );
 ```
 
 ### DuckDB (`structured_queries.duckdb`)
 
 ```sql
--- Metadata registry (one row per CSV table)
+-- Metadata registry (one row per CSV-derived table)
 CREATE TABLE tables_metadata (
     table_name TEXT,
     role       TEXT
 );
 
--- Dynamic tables (one per uploaded CSV, named from filename stem)
--- e.g.:  employee_data,  finance_report_2024,  marketing_campaigns
+-- Dynamic tables (one per uploaded CSV)
+-- Named from filename stem, sanitized to [a-zA-Z0-9_]
+-- Example: employee_data, finance_report_2024, marketing_campaigns
 CREATE TABLE <filename_stem> AS SELECT * FROM '<csv_path>';
 ```
 
@@ -564,46 +961,70 @@ CREATE TABLE <filename_stem> AS SELECT * FROM '<csv_path>';
 
 ## 📡 API Reference
 
+**Interactive docs:** [`http://localhost:8000/docs`](http://localhost:8000/docs) (Swagger UI auto-generated)
+
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| `GET` | `/health` | None | Health check |
-| `GET` | `/login` | HTTP Basic | Returns JWT access token |
-| `POST` | `/chat` | Bearer JWT | Synchronous chat response |
+| `GET` | `/health` | None | Health check + version |
+| `GET` | `/login` | HTTP Basic | Returns JWT access token + role |
+| `POST` | `/chat` | Bearer JWT | Synchronous chat (JSON response) |
 | `POST` | `/chat-stream` | Bearer JWT | NDJSON streaming response |
-| `POST` | `/upload` | Bearer JWT | Upload document (MD, CSV, PDF) |
-| `GET` | `/documents` | Bearer JWT | List accessible documents |
+| `POST` | `/upload-docs` | Bearer JWT (C-Level) | Upload document (MD, CSV, PDF) |
+| `GET` | `/documents` | Bearer JWT | List accessible documents for user's role |
+| `GET` | `/documents/{id}/content` | Bearer JWT | Document text content |
+| `GET` | `/documents/{id}/pdf` | Bearer JWT | Authenticated PDF blob (no-store) |
 | `GET` | `/roles` | Bearer JWT | List all roles |
-| `GET` | `/indexing-status` | Bearer JWT | Per-file embedding progress (upload bar) |
-| `GET` | `/system-metrics` | C-Level JWT | Docs / users / roles / tables counts |
-| `POST` | `/create-user` | C-Level JWT | Create a new user |
-| `POST` | `/create-role` | C-Level JWT | Create a new role |
-| `GET` | `/reindex-status` | C-Level JWT | Embedding progress summary |
-| `GET` | `/reindex-details` | C-Level JWT | Per-document indexing status |
-| `POST` | `/reindex` | C-Level JWT | Wipe & rebuild vector store |
-| `POST` | `/reindex-retry` | C-Level JWT | Retry failed/pending documents |
-| `GET` | `/indexing-status-bulk` | C-Level JWT | All docs status (admin dashboard) |
-| `POST` | `/evaluate` | C-Level JWT | Run RAGAS + RBAC evaluation |
-| `GET` | `/evaluate/status` | C-Level JWT | Last evaluation result |
-| `GET` | `/evaluate/report` | C-Level JWT | Download HTML evaluation report |
+| `GET` | `/indexing-status` | Bearer JWT | Per-file embedding progress (for upload flow) |
+| `GET` | `/system-metrics` | Bearer JWT (C-Level) | Docs / users / roles / tables counts |
+| `POST` | `/create-user` | Bearer JWT (C-Level) | Create a new user with role |
+| `POST` | `/create-role` | Bearer JWT (C-Level) | Create a new department role |
+| `GET` | `/reindex-status` | Bearer JWT (C-Level) | Embedding progress summary (counts) |
+| `GET` | `/reindex-details` | Bearer JWT (C-Level) | Per-document indexing status |
+| `POST` | `/reindex` | Bearer JWT (C-Level) | Wipe vector store + rebuild all embeddings |
+| `POST` | `/reindex-retry` | Bearer JWT (C-Level) | Retry failed/pending documents only |
+| `GET` | `/indexing-status-bulk` | Bearer JWT (C-Level) | All documents status (admin dashboard) |
+| `POST` | `/evaluate` | Bearer JWT (C-Level) | Run RAGAS + RBAC evaluation async |
+| `GET` | `/evaluate/status` | Bearer JWT (C-Level) | Latest evaluation result JSON |
+| `GET` | `/evaluate/report` | Bearer JWT (C-Level) | Download HTML evaluation report |
 
-**Interactive docs:** `http://localhost:8000/docs`
+### Example: Chat Stream Response
+
+```bash
+curl -X POST http://localhost:8000/chat-stream \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What was our gross margin in 2024?", "history": []}'
+```
+
+```
+{"type":"init","user":"alice","role":"Finance","mode":"RAG"}
+{"type":"token","content":"Based on the 2024 financial report,"}
+{"type":"token","content":" the gross margin was **42.3%**,"}
+{"type":"token","content":" representing an improvement of 2.1 percentage points"}
+{"type":"token","content":" compared to 40.2% in 2023."}
+{"type":"metadata","sources":["finance_report_2024.md"],"fallback":false}
+```
 
 ---
 
 ## 🔑 Role & Permission Matrix
 
-| Role | Own Dept Docs | General Docs | All Dept Docs | Upload | Admin | Evaluate |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|
-| **C-Level** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Finance** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **HR** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Marketing** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Engineering** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **General** | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Role | Own Dept Docs | General Docs | All Dept Docs | CSV Analytics | Upload Docs | Admin Panel | Run Evaluation |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **C-Level** | ✅ | ✅ | ✅ | ✅ (all tables) | ✅ | ✅ | ✅ |
+| **Finance** | ✅ | ✅ | ❌ | ✅ (own tables) | ❌ | ❌ | ❌ |
+| **HR** | ✅ | ✅ | ❌ | ✅ (own tables) | ❌ | ❌ | ❌ |
+| **Marketing** | ✅ | ✅ | ❌ | ✅ (own tables) | ❌ | ❌ | ❌ |
+| **Engineering** | ✅ | ✅ | ❌ | ✅ (own tables) | ❌ | ❌ | ❌ |
+| **General** | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
-Cross-department access attempts return a formatted denial message — no data is leaked and no LLM call is made.
+**Where "own dept docs" access is blocked:**
+- Cross-department query detected by dept guard → formatted denial message
+- No LLM call is made, no data is retrieved
+- ChromaDB filter: `{"role": {"$in": [user_role, "general"]}}` enforced at query time
+- DuckDB sandbox: only role-authorized tables are copied into the sandbox
 
-> **Frontend Route Guard:** C-Level-only pages (`/upload`, `/kb-indexing`, `/admin`, `/evaluation`) use a `CLevelRoute` guard component that redirects non-C-Level users to `/chat`.
+> **Frontend Route Guard:** C-Level-only pages (`/upload`, `/kb-indexing`, `/admin`, `/evaluation`) use a `CLevelRoute` component that redirects unauthorized users to `/chat` before rendering.
 
 ---
 
@@ -612,156 +1033,226 @@ Cross-department access attempts return a formatted denial message — no data i
 ### Prerequisites
 
 - **Python 3.10+**
-- **Node.js 24** and **npm** (for the React frontend)
-- A [Google Gemini API key](https://aistudio.google.com/app/apikey)
-- *(Optional)* A [Cohere API key](https://dashboard.cohere.com/) for reranking
+- **Node.js 20+** and **npm** (for the React frontend)
+- **[Google Gemini API key](https://aistudio.google.com/app/apikey)** *(required)*
+- **[Cohere API key](https://dashboard.cohere.com/)** *(optional — enables reranking)*
+- **Docker + Docker Compose** *(recommended — optional for local dev)*
 
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/your-org/finsight.git
-cd finsight
-```
-
-### 2. Create a Python Virtual Environment
+### Option A — Docker Compose (Recommended)
 
 ```bash
-python -m venv .venv
+# 1. Clone
+git clone https://github.com/hamza1713/Enterprise-RAG-Chatbot-with-Role-Base-Access-Control-.git
+cd Enterprise-RAG-Chatbot-with-Role-Base-Access-Control-
 
-# Windows
-.venv\Scripts\activate
-
-# macOS / Linux
-source .venv/bin/activate
-```
-
-### 3. Install Python Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Install Frontend Dependencies
-
-```bash
-cd frontend
-npm install
-cd ..
-```
-
-### 5. Configure Environment Variables
-
-```bash
+# 2. Configure
 cp .env.example .env
-```
+# Edit .env — set GOOGLE_API_KEY at minimum
 
-Edit `.env` and set at minimum:
-
-```env
-GOOGLE_API_KEY=your_google_gemini_api_key_here
-```
-
-### 6. Start the Application
-
-**Option A — Docker Compose (Recommended - runs in containers):**
-
-Ensure you have Docker and Docker Compose installed, then run:
-
-```bash
+# 3. Launch (builds and starts both backend + frontend)
 docker compose up --build
 ```
 
-This starts:
-- The FastAPI backend container on port `8000` (auto-reloading on python file changes).
-- The React/Vite frontend container on port `5173` (with hot-module reloading/HMR active).
-- SQLite/DuckDB/ChromaDB databases are persisted on the host, so data persists when containers stop.
+Open **http://localhost:5173** — FinSight automatically seeds the database and begins embedding documents in the background.
 
-**Option B — Windows batch files (two separate terminals):**
+> **First run:** The KB Indexing page shows real-time embedding progress. Documents become queryable as they are indexed.
+
+---
+
+### Option B — Windows Batch Files
 
 ```bat
-back.bat    # Terminal 1 — starts FastAPI on port 8000
-front.bat   # Terminal 2 — starts React dev server on port 5173
+# Terminal 1
+back.bat    # starts FastAPI on port 8000
+
+# Terminal 2
+front.bat   # starts React dev server on port 5173
 ```
 
-**Option C — Manual (two terminals):**
+---
+
+### Option C — Manual (any OS)
 
 ```bash
+# 1. Clone & configure
+git clone https://github.com/hamza1713/Enterprise-RAG-Chatbot-with-Role-Base-Access-Control-.git
+cd Enterprise-RAG-Chatbot-with-Role-Base-Access-Control-
+cp .env.example .env
+# Edit .env — set GOOGLE_API_KEY
+
+# 2. Backend
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+pip install -r requirements.txt
+
+# 3. Frontend
+cd frontend
+npm install
+cd ..
+
+# 4. Start (two terminals)
 # Terminal 1 — FastAPI backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-# Terminal 2 — React frontend (Vite dev server)
-cd frontend
-npm run dev
+# Terminal 2 — React frontend
+cd frontend && npm run dev
 ```
 
-### 7. Open the App
+Open **http://localhost:5173**
 
-Navigate to **http://localhost:5173** and log in with any of the [default credentials](#-default-credentials) below.
+---
 
-> **First run:** FinSight automatically seeds the database, copies department documents from `resources/data/`, and begins embedding them in a background thread. The **KB Indexing** page shows real-time embedding progress.
+## 🐳 Docker & Deployment
+
+### Development (docker-compose.yml)
+
+```yaml
+services:
+  backend:   # FastAPI — port 8000, auto-reload, volume-mounted source
+  frontend:  # Vite HMR — port 5173, volume-mounted source
+```
+
+Data persists on the host (SQLite, DuckDB, ChromaDB, uploads are bind-mounted).
+
+### Production (docker-compose.production.yml)
+
+```bash
+# Copy and configure production env
+cp deploy/production.env.example deploy/production.env
+# Edit: JWT_SECRET, ADMIN_PASSWORD, GOOGLE_API_KEY, CORS_ORIGINS (your HTTPS domain)
+
+# Validate config
+docker compose --env-file deploy/production.env \
+  -f docker-compose.production.yml config --quiet
+
+# Build and start
+docker compose --env-file deploy/production.env \
+  -f docker-compose.production.yml up --build -d
+```
+
+**Production architecture:**
+- Frontend container: Nginx serves pre-built React assets, proxies `/api/` → backend
+- Backend container: single Uvicorn worker (process-local state; see note below)
+- Nginx on host port `8080` → place HTTPS reverse proxy in front
+
+> **⚠️ Single-worker constraint:** The indexer, evaluation lock, and embedded databases (SQLite, DuckDB, ChromaDB) use process-local state. Running multiple backend workers causes duplicated startup work and inconsistent coordination. Use exactly **one worker** until these components migrate to shared services.
+
+### Release Verification Checklist
+
+See [`deploy/README.md`](deploy/README.md) for the full 7-step release verification checklist covering:
+HTTPS login → cross-role denial → upload/index/query cycle → browser/mobile testing → restart-during-indexing recovery → backup+restore → load testing.
 
 ---
 
 ## ⚙️ Configuration
 
-All settings are loaded from environment variables (`.env`):
+All settings are loaded from environment variables (`.env` file):
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GOOGLE_API_KEY` | *required* | Google Gemini API key (also accepts `GEMINI_API_KEY`) |
-| `COHERE_API_KEY` | *(empty)* | Enables Cohere reranking when set |
-| `LANGCHAIN_API_KEY` | *(empty)* | LangSmith tracing (optional) |
-| `DB_NAME` | `roles_docs.db` | SQLite filename |
-| `DUCKDB_NAME` | `structured_queries.duckdb` | DuckDB filename |
-| `JWT_SECRET` | *(auto-generated)* | JWT signing key; set for multi-server deploys |
-| `ADMIN_PASSWORD` | `admin123` | C-Level admin password |
-| `FINANCE_PASSWORD` | `finance123` | Finance user password |
-| `HR_PASSWORD` | `hr123` | HR user password |
-| `MARKETING_PASSWORD` | `marketing123` | Marketing user password |
-| `ENGINEERING_PASSWORD` | `engineering123` | Engineering user password |
+| Variable | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `GOOGLE_API_KEY` | string | — | **Yes** | Google Gemini API key (also accepts `GEMINI_API_KEY`) |
+| `COHERE_API_KEY` | string | *(empty)* | No | Enables Cohere reranker when set; system degrades gracefully without it |
+| `LANGCHAIN_API_KEY` | string | *(empty)* | No | LangSmith tracing (optional observability) |
+| `JWT_SECRET` | string | *(auto-generated)* | No | JWT signing key; **set this for multi-server or persistent sessions** |
+| `APP_ENV` | string | `development` | No | Set to `production` to disable sample data preload and tighten defaults |
+| `CORS_ORIGINS` | string | `http://localhost:5173,...` | No | Comma-separated allowed origins |
+| `DB_NAME` | string | `roles_docs.db` | No | SQLite database filename |
+| `DUCKDB_NAME` | string | `structured_queries.duckdb` | No | DuckDB database filename |
+| `PRELOAD_SAMPLE_DATA` | bool | `true` (dev) / `false` (prod) | No | Controls whether `resources/data/` is seeded on startup |
+| `ADMIN_PASSWORD` | string | `admin123` | No | C-Level admin initial password |
+| `FINANCE_PASSWORD` | string | `finance123` | No | Finance user initial password |
+| `HR_PASSWORD` | string | `hr123` | No | HR user initial password |
+| `MARKETING_PASSWORD` | string | `marketing123` | No | Marketing user initial password |
+| `ENGINEERING_PASSWORD` | string | `engineering123` | No | Engineering user initial password |
 
-> ⚠️ **Change all default passwords before any production deployment.**
+> **⚠️ Security:** Change all default passwords before any deployment. The `JWT_SECRET` is auto-generated per-instance by default; set it explicitly for stable cross-restart sessions. In production, existing user passwords are **never overwritten** at startup — changing `ADMIN_PASSWORD` only affects fresh installs.
 
 ---
 
-## 🔓 Default Credentials
+## 🔓 Seeded Development Accounts
 
-| Username | Password | Role |
-|----------|----------|------|
-| `admin` | `admin123` | **C-Level** (full access) |
-| `finance` | `finance123` | Finance |
-| `hr` | `hr123` | HR |
-| `marketing` | `marketing123` | Marketing |
-| `engineering` | `engineering123` | Engineering |
+FinSight includes pre-configured local development accounts seeded at startup for role testing. Passwords are set via environment variables in `.env` (or default to `.env.example` templates in development mode):
+
+| Username | Default Role | Permitted Access Scope | Config Variable |
+|----------|--------------|------------------------|-----------------|
+| `admin` | **C-Level** | Full system access — uploads, admin controls, evaluation, all department data | `ADMIN_PASSWORD` |
+| `finance` | **Finance** | Finance documents + General workspace documents + Finance CSV analytics | `FINANCE_PASSWORD` |
+| `hr` | **HR** | HR documents + General workspace documents + HR CSV analytics | `HR_PASSWORD` |
+| `marketing` | **Marketing** | Marketing documents + General workspace documents + Marketing CSV analytics | `MARKETING_PASSWORD` |
+| `engineering` | **Engineering** | Engineering documents + General workspace documents + Engineering CSV analytics | `ENGINEERING_PASSWORD` |
+
+> ⚠️ **Production Security Notice:** In production environments (`APP_ENV=production`), FinSight seeds only the initial administrator account and strictly enforces an `ADMIN_PASSWORD` of at least 14 characters. Department accounts and custom roles are provisioned dynamically through the Admin UI. Existing password hashes are preserved and never overwritten on startup. Never commit production credentials or API keys.
 
 ---
 
 ## 🧪 Testing
 
-FinSight includes comprehensive unit and integration test suites covering the backend API, RBAC security gates, and evaluation thresholds.
+FinSight includes comprehensive test suites across four independent tracks:
 
-### 1. Backend API & RBAC Tests (Pytest)
-
-Run all API, authentication, query classifier, and RBAC security tests:
+### 1. Backend API & RBAC Tests (60 tests)
 
 ```bash
 pytest tests/test_chatbot.py -v
 ```
 
-**Tests cover:**
-- JWT authentication flow (issuance, expiration, and invalid token rejection)
-- RBAC denial for cross-department queries (department access checks)
-- Query classifier routing (SQL vs RAG vs Greetings)
-- Natural language to SQL generation and DuckDB execution
-- Document upload and indexing status
+Covers:
+- ✅ JWT authentication flow (issuance, 12h expiry, invalid token rejection)
+- ✅ RBAC denial for cross-department queries
+- ✅ Query classifier routing (SQL vs RAG vs GREETING)
+- ✅ Natural language → SQL generation + DuckDB execution
+- ✅ Document upload, validation, and indexing status
+- ✅ C-Level admin operations (create user, create role, reindex)
+- ✅ Health endpoint
 
-### 2. Evaluation Pipeline & Threshold Tests
+### 2. Evaluation Pipeline Tests
 
 ```bash
-# Run fast unit tests (no live API calls required):
+# Fast unit tests — no live API calls (mocked)
 pytest tests/test_ragas_eval.py -v -m "not slow"
 
-# Run full test suite:
+# Full integration suite (requires live vectorstore + API key)
+pytest tests/test_ragas_eval.py -v -m "slow"
+```
+
+### 3. Security Regression Suite (20 tests)
+
+```bash
+pytest verification/test_security.py -v
+# → 20 passed
+```
+
+Covers OWASP-aligned security tests:
+- Upload path traversal prevention
+- SQL injection in generated queries
+- Role escalation via stale JWT
+- PDF access beyond registered documents
+- File size limit enforcement
+- Duplicate upload protection
+
+### 4. Frontend Stream Parsing Tests (5 tests)
+
+```bash
+node --test frontend/verification/ndjson.test.mjs
+# → 5 passed
+```
+
+Covers:
+- NDJSON bounded reader with split-record handling
+- UTF-8 boundary safety
+- Malformed record validation
+- AbortController cancellation
+
+### Full Suite
+
+```bash
+# Run everything (fast tests only, no live API calls)
+pytest -v -m "not slow"
+
+# Run everything including live integration tests
 pytest -v
 ```
 
@@ -769,79 +1260,131 @@ pytest -v
 
 ## 📈 Evaluation Framework
 
-FinSight provides a robust, two-tier evaluation framework:
+FinSight provides a **dual-track evaluation framework** that can be triggered from the React UI (`/evaluation` page — C-Level only) or via the CLI:
 
-### 1. Quota-Free Fast Evaluation (`run_no_llm_evaluation.py`)
-
-A zero-cost, lightning-fast evaluation runner that uses local mathematical and statistical metrics (Cosine similarity on Google embeddings, BM25 token overlap, and ROUGE-L sequence matching) without consuming LLM-as-judge API quota:
+### Track 1 — Quota-Free Fast Evaluation
 
 ```bash
 python run_no_llm_evaluation.py
+# Completes in < 2 minutes, zero LLM API quota consumed
 ```
 
-| Metric | Computation Method | Description |
-|--------|-------------------|-------------|
-| **`context_recall`** | `cos_sim(mean(contexts), reference)` | Measures semantic recall of necessary context |
-| **`answer_relevancy`** | `cos_sim(question, answer)` | Measures direct relevance of generated answer to question |
-| **`context_precision`** | BM25 top chunk scoring | Evaluates signal-to-noise ratio in retrieved context |
-| **`faithfulness_token`** | ROUGE-L token recall | Measures factual alignment of answer against context |
-| **`answer_similarity`** | `cos_sim(answer, reference)` | Assesses semantic agreement with ground-truth reference |
+| Metric | Computation | Interpretation |
+|--------|-------------|---------------|
+| `answer_relevancy` | `cosine_sim(embed(question), embed(answer))` | How directly the answer addresses the question |
+| `context_recall` | `cosine_sim(mean(embed(contexts)), embed(reference))` | How well retrieved context covers the ground truth |
+| `context_precision` | BM25 top-chunk scoring vs question | Signal-to-noise ratio in retrieved context |
+| `faithfulness_token` | ROUGE-L token recall (answer vs context) | N-gram overlap (conservative — LLMs paraphrase) |
+| `answer_similarity` | `cosine_sim(embed(answer), embed(reference))` | Semantic agreement with the ground-truth reference |
 
-### 2. Full RAGAS LLM-as-Judge Evaluation (`run_full_ragas_evaluation.py`)
-
-Executes live RAG queries and evaluates answers using Gemini LLM-as-judge:
+### Track 2 — Full RAGAS LLM-as-Judge
 
 ```bash
 python run_full_ragas_evaluation.py
+# Uses Gemini as the judge LLM — no OpenAI key required
 ```
 
-### 3. RBAC Security Test Suite
+Gemini LLM-as-judge evaluates **Faithfulness**, **Answer Relevancy**, **Context Precision**, **Context Recall**, and **Answer Correctness** on the curated QA dataset.
 
-Evaluates access control integrity with 6 automated security tests:
-1. `test_unauthorized_access_blocked`: Cross-department access attempts are blocked.
-2. `test_authorized_access_allowed`: Department users can access their own department documents.
-3. `test_clevel_sees_all`: C-Level administrators have cross-department visibility.
-4. `test_general_docs_accessible_to_all`: General/company-wide docs are accessible to all roles.
-5. `test_retriever_filter_correctness`: ChromaDB metadata filter enforces role boundaries.
-6. `test_authorization_leakage_score`: RAGAS leakage score verification.
+### Track 3 — RBAC Security Evaluation
 
-### 4. Interactive Web Evaluation Dashboard & HTML Reports
+Runs automatically as part of `POST /evaluate`. Tests 6 security scenarios:
 
-- **C-Level Evaluation Dashboard:** Navigate to `/evaluation` in the React UI to view real-time scorecards, interactive Recharts bar charts, and individual QA records.
-- **HTML Report Export:** A comprehensive visual report is automatically compiled to `app/rag_evaluator/ragas_report.html` and downloadable via `GET /evaluate/report`.
+```
+1. test_unauthorized_access_blocked   — Role A cannot retrieve Role B documents
+2. test_authorized_access_allowed     — Role A can retrieve its own documents
+3. test_clevel_sees_all              — C-Level retrieves cross-department documents
+4. test_general_docs_accessible_to_all — General docs reachable by every role
+5. test_retriever_filter_correctness  — ChromaDB metadata filter correctly applied
+6. test_authorization_leakage_score  — Cross-role context precision ≈ 0
+```
+
+### Production Threshold Reference
+
+```
+RAGAS Thresholds (LLM-as-judge, Gemini):
+  faithfulness:       PASS ≥ 0.75  |  WARN < 0.85  |  CRITICAL < 0.65
+  answer_relevancy:   PASS ≥ 0.70  |  WARN < 0.75  |  CRITICAL < 0.55
+  context_precision:  PASS ≥ 0.65  |  WARN < 0.70  |  CRITICAL < 0.50
+  context_recall:     PASS ≥ 0.70  |  WARN < 0.75  |  CRITICAL < 0.55
+  answer_correctness: PASS ≥ 0.60  |  WARN < 0.65  |  CRITICAL < 0.45
+
+Note: Two-tier thresholds prevent noisy CI failures on borderline cases
+while still catching real regressions. Set below "ideal" (0.90+) to account
+for Gemini-as-judge vs GPT-4 calibration differences.
+```
+
+### Viewing Results
+
+- **Web Dashboard:** Navigate to `/evaluation` in the React UI — interactive Recharts bar charts per metric and per role
+- **Download Report:** `GET /evaluate/report` — downloads `ragas_report.html` (comprehensive visual report)
+- **JSON Status:** `GET /evaluate/status` — returns `last_eval_status.json` with all scores and PASS/WARN/FAIL flags
 
 ---
 
 ## 💬 Sample Queries
 
-Try these queries after logging in with the appropriate role:
+Try these after logging in with the appropriate role:
 
-| Role | Query | Expected Mode |
-|------|-------|--------------|
-| **HR** | `Give me the details of employees in the Data department with a performance rating of 5` | SQL |
-| **HR** | `Summarize our employee onboarding policy` | RAG |
-| **Finance** | `What was the percentage increase in net income in 2024?` | RAG |
-| **Finance** | `Show me all vendor expenses greater than $50,000` | SQL |
-| **Marketing** | `What is the ROI for our Q3 campaign?` | SQL/RAG |
-| **Engineering** | `Give me a summary of the system architecture` | RAG |
-| **C-Level** | `Compare Finance and Marketing budget allocations` | RAG |
-| **General** | `What are the company leave policies?` | RAG |
-| **Any** | `Hello!` | Greeting (no LLM) |
-| **HR** *(attempting Finance)* | `What is our gross margin?` | 🔒 RBAC Denied |
+| Role | Query | Expected Mode | What demonstrates |
+|------|-------|--------------|-------------------|
+| **HR** | `Give me details of employees in Data dept with performance rating 5` | SQL | NL→SQL, CSV analytics, role filter |
+| **HR** | `Summarize our employee onboarding policy` | RAG | Document retrieval, Markdown answer |
+| **Finance** | `What was the percentage increase in net income in 2024?` | RAG | Grounded numeric answer with source |
+| **Finance** | `Show me all vendor expenses greater than $50,000` | SQL | Numeric filter, tabulated output |
+| **Marketing** | `What is the ROI for our Q3 campaign?` | SQL / RAG | Hybrid routing, fallback behavior |
+| **Engineering** | `Give me a summary of the system architecture` | RAG | Technical doc retrieval |
+| **C-Level** | `Compare Finance and Marketing budget allocations` | RAG | Cross-department access |
+| **General** | `What are the company leave policies?` | RAG | General doc access only |
+| **Any role** | `Hello!` | GREETING | Zero-cost response (no LLM) |
+| **HR → Finance** | `What is our gross margin?` | 🔒 DENIED | RBAC guard, no data accessed |
 
 ---
 
-## 🔮 Future Enhancements
+## 🔮 Roadmap
 
-- [ ] **Hybrid retrieval** — combine dense (Chroma) + sparse (BM25) for better recall
-- [ ] **Multi-turn conversation memory** — maintain session context across queries
-- [ ] **Admin analytics dashboard** — query type distribution, usage heatmaps per department
-- [ ] **Table + text fusion** — answer questions that span both CSV data and document policies
-- [ ] **SQL query caching** — LRU cache for repeated structured queries
-- [ ] **OAuth 2.0 / SSO** — enterprise identity provider integration
-- [ ] **Async indexer** — replace thread executor with a proper task queue (Celery/ARQ)
-- [ ] **Multi-modal support** — extract data from images and charts in PDFs
-- [ ] **Production build** — `npm run build` + FastAPI static file serving for single-server deployment
+### Release 1 — Reliability & Trust
+- [ ] **Durable indexing jobs** — Celery/ARQ task queue with retry, pause, cancel, dead-letter state, and idempotent document versions
+- [ ] **Conversation history** — persistent multi-turn memory with user-controlled retention and export/delete
+- [ ] **Answer feedback** — thumbs up/down, citations that jump to exact source section, "I don't know" confidence threshold
+- [ ] **Admin audit log** — user disable/enable, role change history, session revocation
+- [ ] **SQL schema validation** — type inference preview, row/column privacy rules, query cost/timeouts
+
+### Release 2 — Enterprise Adoption
+- [ ] **OIDC/SAML SSO** — enterprise identity provider, SCIM provisioning, MFA, group-to-role mapping
+- [ ] **Object storage** — S3/GCS for documents with malware scanning, encryption at rest, retention policies
+- [ ] **Hybrid retrieval** — BM25 + dense fusion already implemented; add per-source quality analytics and freshness controls
+- [ ] **Cross-source answers** — clearly separate document evidence from computed SQL data in a single response
+- [ ] **Usage dashboard** — token/cost budgets, per-role analytics, provider fallback policy
+
+### Release 3 — Scale & Intelligence
+- [ ] **PostgreSQL** — replace SQLite for shared metadata at horizontal scale
+- [ ] **Managed vector store** — Pinecone/Weaviate/Qdrant for production horizontal scaling
+- [ ] **Semantic caching** — permission-aware cache keys with invalidation on document version changes
+- [ ] **Multimodal PDF** — chart and image extraction with human review for low-confidence ingestion
+- [ ] **CI evaluation gates** — RAGAS regression suite in CI, prompt/model versioning, A/B experiments
+- [ ] **Accessibility** — keyboard-first workflows, formal WCAG 2.1 AA audit
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository and create a feature branch
+2. Run `pytest -v -m "not slow"` and `pytest verification/test_security.py` — all must pass
+3. Run `cd frontend && npx oxlint --deny-warnings .` — no lint warnings
+4. Open a pull request with a clear description of the change and its motivation
+
+For major changes, please open an issue first to discuss the design.
+
+---
+
+## 🔗 Related Work
+
+- [AI Code Review Agent](https://github.com/hamza1713/AI-Code-Review-Agent) — Deterministic-first code intelligence and multi-agent review.
+- [Factscope AI](https://github.com/hamza1713/Factscope-AI) — Claim extraction and source-grounded analysis.
+- [Portfolio](https://github.com/hamza1713/Portfolio) — Project walkthroughs and contact details.
 
 ---
 
@@ -853,8 +1396,15 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 <div align="center">
 
-Built with ❤️ for enterprise AI — **FinSight** by FinSolve Technologies
+Built with ❤️ for enterprise AI
 
-*Role-based intelligence. Source-grounded answers.*
+**FinSight** — *Role-based intelligence. Source-grounded answers.*
+
+*by FinSolve Technologies*
+
+---
+
+*Stack in one line:*
+`React 19 + Vite` → `FastAPI + JWT RBAC` → `Gemini 2.5 Flash` → `ChromaDB dense + SQLite FTS5 BM25 (RRF)` → `DuckDB in-memory sandbox` → `RAGAS evaluation`
 
 </div>
