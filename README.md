@@ -1,6 +1,5 @@
 <div align="center">
 
-<img src="static/images/arch.png" alt="FinSight Architecture" width="80"/>
 
 # 🔍 FinSight
 
