@@ -16,9 +16,10 @@
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-VectorStore-FF6F00?style=for-the-badge)](https://trychroma.com)
 [![DuckDB](https://img.shields.io/badge/DuckDB-SQL_Analytics-FFD700?style=for-the-badge)](https://duckdb.org)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
+[![Redis](https://img.shields.io/badge/Redis-Cache-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
 
-[![Tests](https://img.shields.io/badge/Backend_Tests-60_passed-22c55e?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Backend_Tests-65_passed-22c55e?style=flat-square)](tests/)
 [![Security Tests](https://img.shields.io/badge/Security_Suite-20_passed-22c55e?style=flat-square)](verification/)
 [![RBAC Score](https://img.shields.io/badge/RBAC_Security-0.933_avg-22c55e?style=flat-square)](#-evaluation-scorecard)
 [![Answer Relevancy](https://img.shields.io/badge/Answer_Relevancy-0.840-22c55e?style=flat-square)](#-evaluation-scorecard)
@@ -38,7 +39,8 @@
 
 ```
 FinSight = React 19 SPA (Vite + TypeScript)
-         → FastAPI (JWT-authenticated, role-scoped)
+         → FastAPI (JWT-authenticated, SlowAPI rate-limited, role-scoped)
+         → Redis / In-Memory Multi-Tier Caching (role-isolated, sub-20ms replay)
          → Gemini LLM (classifier + embeddings + answer generation)
          → ChromaDB dense retrieval + SQLite FTS5 BM25 (hybrid RRF)
          → DuckDB in-memory SQL sandbox (role-filtered, SELECT-only)
@@ -121,7 +123,7 @@ Users query their department data in plain English. FinSight classifies each que
 flowchart TD
     subgraph CLIENT["🖥️  Client Layer — React 19 SPA (Vite · TypeScript · port 5173)"]
         LOGIN["LoginPage\nHTTP Basic → JWT"]
-        CHAT_UI["ChatPage\nStreaming NDJSON + AbortController"]
+        CHAT_UI["ChatPage\nStreaming NDJSON + AbortController\nStructured Data Badge (SQL Concealed)"]
         EXPLORER["ExplorerPage\nDocument Browser"]
         UPLOAD_UI["UploadPage\nC-Level only"]
         KB["KbIndexingPage\nEmbedding Monitor"]
@@ -130,9 +132,9 @@ flowchart TD
     end
 
     subgraph FASTAPI["⚡  FastAPI Backend  (Uvicorn · port 8000)"]
-        AUTH["🔐 /login\nHTTP Basic → JWT HS256"]
-        CHAT["💬 /chat & /chat-stream\nNDJSON streaming"]
-        DOCS["📄 /upload /documents\nC-Level upload gate"]
+        AUTH["🔐 /login\nHTTP Basic → JWT HS256\nRate limit: 5/min"]
+        CHAT["💬 /chat & /chat-stream\nNDJSON streaming\nRate limit: 30/min"]
+        DOCS["📄 /upload /documents\nC-Level upload gate\nRate limit: 10/min"]
         ADMIN["⚙️ /admin\nC-Level only"]
         EVAL["📊 /evaluate\nRAGAS + RBAC"]
         HEALTH["❤️ /health /system-metrics"]
@@ -144,6 +146,8 @@ flowchart TD
         SEC["security.py\nJWT · bcrypt · stale-role guard"]
         USR["users.py\nSeed · password policy"]
         SANDBOX["sql_sandbox.py\nDuckDB in-memory isolation"]
+        LIMIT["limiter.py\nSlowAPI rate limiter instance"]
+        CACHE["cache.py\nMulti-tier role-scoped query cache\nRedis + memory fallback"]
     end
 
     subgraph RAG_ENGINE["🤖  RAG + SQL Engine (app/rag/)"]
@@ -159,6 +163,7 @@ flowchart TD
         SQLITE[("SQLite WAL\nroles_docs.db\nUsers · Roles · Docs · FTS5")]
         DUCK[("DuckDB in-memory\nCSV tables per role\n10s timeout · 1000-row limit")]
         CHROMA[("ChromaDB\nchroma_db/\nRole-filtered embeddings")]
+        REDIS[("Redis 7 / Memory Cache\nRole-scoped query cache\nTTL 300s · Sub-20ms replay")]
     end
 
     subgraph EVAL_PKG["🧪  Evaluation  (app/rag_evaluator/)"]
@@ -498,7 +503,34 @@ rows  = cursor.fetchmany(row_limit + 1)   # hard cap: 1000 rows
 
 ---
 
-### 🔁 5. Production-Grade Embeddings with Smart Retry
+### ⚡ 5. Production Resilience: Rate Limiting & Multi-Tier Caching
+
+To guarantee enterprise service-level reliability and defend against denial-of-service or quota exhaustion, FinSight implements a multi-tier resilience layer:
+
+```
+Incoming Request
+       │
+       ├── Rate Limiter (SlowAPI / Limiter)
+       │     ├─ /login:        5 req/min  (Brute-force protection)
+       │     ├─ /upload-docs: 10 req/min  (Resource exhaustion defense)
+       │     └─ /chat:        30 req/min  (LLM quota preservation)
+       │
+       └── Role-Scoped Cache Check (Redis async + In-Memory Fallback)
+             ├─ Cache Hit  ──> Instant sub-20ms response / streaming replay
+             └─ Cache Miss ──> Full RAG / SQL execution ──> Cache result (TTL 300s)
+```
+
+**Key resilience capabilities:**
+- **Granular Rate Limiting (`app/core/limiter.py`):** Configured via SlowAPI using client IP or authenticated user identifiers. Tiers protect sensitive endpoints while allowing regular operational use.
+- **Role-Scoped Multi-Tier Caching (`app/core/cache.py`):**
+  - **Zero Cross-Role Leaks:** Cache keys include SHA-256 digests of query text alongside the user's explicit role (`finsight:query:{role}:{digest}`). A Finance user's cached query result can never be returned to an HR user.
+  - **Instant Streaming Replay:** Cached responses for `POST /chat-stream` re-emit NDJSON chunks in milliseconds, providing an instant experience with zero LLM API latency.
+  - **Dual-Layer Fallback:** Connects to Redis (`REDIS_URL`) when available; seamlessly falls back to an in-memory TTL dictionary if Redis is offline, ensuring zero downtime.
+  - **Automated Cache Invalidation:** Ingestion of new documents automatically purges stale department query caches.
+
+---
+
+### 🔁 6. Production-Grade Embeddings with Smart Retry
 
 `RetryingEmbeddings` wraps `GoogleGenerativeAIEmbeddings` with intelligent error classification:
 
@@ -518,12 +550,12 @@ def _classify_api_error(err: Exception) -> str:
 
 ---
 
-### 🌐 6. Modern React SPA
+### 🌐 7. Modern React SPA
 
 | Page | Route | Access | Key Features |
 |------|-------|--------|--------------|
 | **Login** | `/login` | Public | HTTP Basic Auth form → JWT via Zustand + sessionStorage |
-| **AI Chat** | `/chat` | All roles | Streaming NDJSON, mode badges (RAG/SQL/GREETING), copy-to-clipboard, source citations, SQL display, AbortController stop |
+| **AI Chat** | `/chat` | All roles | Streaming NDJSON, mode badges (RAG/Structured Data/GREETING), copy-to-clipboard, source citations, concealed internal SQL (clean enterprise UX), AbortController stop |
 | **Explorer** | `/explorer` | All roles | Browse + search accessible department documents, authenticated PDF preview |
 | **Upload Docs** | `/upload` | C-Level | Drag-and-drop, role assignment, 20MB limit, PDF magic-byte validation |
 | **KB Indexing** | `/kb-indexing` | C-Level | Live embedding progress bar, per-document status, retry failed, full reindex |
@@ -533,6 +565,7 @@ def _classify_api_error(err: Exception) -> str:
 **UI system highlights:**
 - Dark-mode glassmorphism design with CSS custom properties (`--surface-*`, `--accent-*`)
 - Role-coloured sidebar with real-time API health indicator (ping every 15s)
+- Clean executive experience: internal SQL statements and table schemas are hidden from users; verified tabular answers are presented with an elegant "Structured data" badge
 - Animated streaming cursor + thinking indicator during LLM responses
 - Markdown rendering via `react-markdown` + `remark-gfm` (tables, code blocks, bold)
 - Lazy-loaded routes for reduced initial bundle size
@@ -541,7 +574,7 @@ def _classify_api_error(err: Exception) -> str:
 
 ---
 
-### 🗣 7. Multi-Turn Conversation Contextualization
+### 🗣 8. Multi-Turn Conversation Contextualization
 
 Follow-up queries are reformulated into standalone questions using conversation history:
 
@@ -560,7 +593,7 @@ def contextualize_query_llm(question: str, history: list[ChatMessage]) -> str:
 
 ---
 
-### 📦 8. Document Processing — Strategy Pattern
+### 📦 9. Document Processing — Strategy Pattern
 
 Three dedicated loader strategies with type-specific chunking:
 
@@ -574,7 +607,7 @@ All chunks tagged with `role`, `source`, `filepath`, `chunk_id`, `doc_id` metada
 
 ---
 
-### 🔮 9. Gemini LLM Fallback Chain
+### 🔮 10. Gemini LLM Fallback Chain
 
 The LLM is configured with a model fallback chain for resilience:
 
@@ -589,7 +622,7 @@ If the primary model is unavailable or rate-limited, the chain automatically tri
 
 ---
 
-### 🗄 10. Self-Healing Database
+### 🗄 11. Self-Healing Database
 
 On every startup, FinSight runs two reconciliation routines:
 
@@ -665,6 +698,7 @@ This means you can move the project directory, rename folders, or restore from b
 | Suite | Command | Result |
 |-------|---------|--------|
 | Backend API + RBAC | `pytest tests/test_chatbot.py -v` | **60 passed**, 8 deselected |
+| Rate Limiting & Cache (Phase 1) | `pytest tests/test_phase1_resilience.py -v` | **5 passed** |
 | Evaluation pipeline | `pytest tests/test_ragas_eval.py -v -m "not slow"` | ✅ All fast tests passed |
 | Security regression | `pytest verification/test_security.py -v` | **20 passed** |
 | Frontend NDJSON stream | `node --test frontend/verification/ndjson.test.mjs` | **5 passed** |
@@ -726,6 +760,8 @@ Request arrives
 | **Auth** | PyJWT + bcrypt | `≥2.11` / `≥4.3` | HS256 tokens, 12h expiry, bcrypt cost-factor password hashing |
 | **Evaluation** | RAGAS | `≥0.4.3` | LLM-as-judge framework; faithfulness / relevancy / precision / recall metrics |
 | **PDF Parsing** | pdfplumber | `≥0.11.9` | Table extraction with structure preservation; better than PyPDF2 for formatted docs |
+| **Rate Limiter** | SlowAPI | `≥0.1.9` | In-memory & Redis-backed tiered rate limiting (per-IP / per-user) |
+| **Cache Store** | Redis (asyncio) | `≥5.2.0` | Ultra-low latency role-scoped query cache with automatic in-memory fallback |
 
 ### Frontend
 
@@ -765,7 +801,9 @@ finsight/
 │   │   ├── database.py                  # SQLite+DuckDB init, heal, reconcile, preload, FTS5
 │   │   ├── security.py                  # JWT encode/decode, bcrypt hash/verify, secret mgmt
 │   │   ├── sql_sandbox.py               # DuckDB in-memory execution sandbox (OWASP-compliant)
-│   │   └── users.py                     # Default user seeding, password policy enforcement
+│   │   ├── users.py                     # Default user seeding, password policy enforcement
+│   │   ├── limiter.py                   # SlowAPI rate limiting configuration & IP/user key functions
+│   │   └── cache.py                     # Dual-tier role-scoped query cache (Redis + in-memory fallback)
 │   │
 │   ├── rag/                             # RAG + SQL engine
 │   │   ├── module.py                    # HybridMultiQueryRetriever, RetryingEmbeddings, indexer
@@ -839,6 +877,7 @@ finsight/
 ├── tests/
 │   ├── conftest.py                     # Pytest fixtures and test isolation
 │   ├── test_chatbot.py                 # 60 backend API + RBAC tests (FastAPI TestClient)
+│   ├── test_phase1_resilience.py       # 5 rate limiting & role-scoped cache resilience tests
 │   ├── test_ragas_eval.py              # Evaluation pipeline tests (mock + integration)
 │   └── sample_docs/                    # Isolated sample documents for tests
 │
@@ -1113,6 +1152,7 @@ Open **http://localhost:5173**
 services:
   backend:   # FastAPI — port 8000, auto-reload, volume-mounted source
   frontend:  # Vite HMR — port 5173, volume-mounted source
+  redis:     # Redis 7 Alpine — port 6379, healthcheck & cache storage
 ```
 
 Data persists on the host (SQLite, DuckDB, ChromaDB, uploads are bind-mounted).
@@ -1167,6 +1207,9 @@ All settings are loaded from environment variables (`.env` file):
 | `HR_PASSWORD` | string | `hr123` | No | HR user initial password |
 | `MARKETING_PASSWORD` | string | `marketing123` | No | Marketing user initial password |
 | `ENGINEERING_PASSWORD` | string | `engineering123` | No | Engineering user initial password |
+| `REDIS_URL` | string | `redis://localhost:6379/0` | No | Redis connection URL for query caching |
+| `RATE_LIMIT_ENABLED` | bool | `true` | No | Enables or disables SlowAPI rate limiting globally |
+| `CACHE_TTL_SECONDS` | int | `300` | No | Expiration TTL (in seconds) for role-scoped cached queries |
 
 > **⚠️ Security:** Change all default passwords before any deployment. The `JWT_SECRET` is auto-generated per-instance by default; set it explicitly for stable cross-restart sessions. In production, existing user passwords are **never overwritten** at startup — changing `ADMIN_PASSWORD` only affects fresh installs.
 
@@ -1207,7 +1250,20 @@ Covers:
 - ✅ C-Level admin operations (create user, create role, reindex)
 - ✅ Health endpoint
 
-### 2. Evaluation Pipeline Tests
+### 2. Rate Limiting & Role-Scoped Cache Tests (5 tests)
+
+```bash
+pytest tests/test_phase1_resilience.py -v
+```
+
+Covers:
+- ✅ SlowAPI per-IP rate limiting enforcement on `/login` (blocks after limit with 429)
+- ✅ SlowAPI per-user rate limiting enforcement on `/chat` and `/upload-docs`
+- ✅ Role-scoped Redis/in-memory cache hits (sub-20ms instant responses)
+- ✅ Multi-tenant isolation: cache cross-role bleed prevention (Finance queries cannot leak to HR)
+- ✅ Automatic cache invalidation upon uploading new documents
+
+### 3. Evaluation Pipeline Tests
 
 ```bash
 # Fast unit tests — no live API calls (mocked)
@@ -1217,7 +1273,7 @@ pytest tests/test_ragas_eval.py -v -m "not slow"
 pytest tests/test_ragas_eval.py -v -m "slow"
 ```
 
-### 3. Security Regression Suite (20 tests)
+### 4. Security Regression Suite (20 tests)
 
 ```bash
 pytest verification/test_security.py -v
@@ -1232,7 +1288,7 @@ Covers OWASP-aligned security tests:
 - File size limit enforcement
 - Duplicate upload protection
 
-### 4. Frontend Stream Parsing Tests (5 tests)
+### 5. Frontend Stream Parsing Tests (5 tests)
 
 ```bash
 node --test frontend/verification/ndjson.test.mjs
