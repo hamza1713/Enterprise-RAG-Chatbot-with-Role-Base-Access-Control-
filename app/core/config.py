@@ -81,6 +81,11 @@ else:
         "http://127.0.0.1:8501",
     ]
 
+# ── Redis, Caching & Rate Limiting ─────────────────────────────────────────────
+REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
+CACHE_TTL_SECONDS: int = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+
 
 # ── Gemini model fallback list ─────────────────────────────────────────────────
 GEMINI_MODELS: list[str] = [

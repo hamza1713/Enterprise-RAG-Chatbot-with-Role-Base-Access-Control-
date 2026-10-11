@@ -25,6 +25,8 @@ from contextlib import asynccontextmanager
 from app.core.config import CORS_ORIGINS, APP_ENV
 from app.core.database import init_sqlite_schema, init_duckdb_schema, heal_stale_filepaths, reconcile_duckdb_from_sqlite, preload_default_data
 from app.core.users import seed_default_users
+from app.core.limiter import limiter, rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.api.auth      import router as auth_router
 from app.api.chat      import router as chat_router
@@ -76,6 +78,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

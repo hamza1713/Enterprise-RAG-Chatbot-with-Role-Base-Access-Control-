@@ -12,7 +12,9 @@ from io import BytesIO
 
 import duckdb
 import pandas as pd
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, Request
+from app.core.limiter import limiter
+from app.core.cache import cache_manager
 from fastapi.responses import JSONResponse
 
 from app.core.config import DUCKDB_PATH, UPLOAD_DIR
@@ -28,7 +30,9 @@ router = APIRouter(tags=["documents"])
 
 
 @router.post("/upload-docs")
+@limiter.limit("10/minute")
 async def upload_docs(
+    request: Request,
     background_tasks: BackgroundTasks,
     file:  UploadFile = File(...),
     role:  str        = Form(...),
@@ -108,6 +112,12 @@ async def upload_docs(
         conn.close()
 
         background_tasks.add_task(run_indexer)
+
+        # Invalidate query cache for affected roles
+        cache_manager.delete_prefix(f"finsight:cache:{role.lower()}:")
+        cache_manager.delete_prefix("finsight:cache:c-level:")
+        if role.lower() == "general":
+            cache_manager.clear()
 
         return JSONResponse(content={
             "message": f"'{filename}' uploaded for role '{role}'. Indexing started."

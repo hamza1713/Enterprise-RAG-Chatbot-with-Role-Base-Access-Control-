@@ -116,7 +116,6 @@ export default function ChatPage() {
   const [isSending, setIsSending] = useState(false);
   const [accessibleDocs, setAccessibleDocs] = useState<DocInfo[]>([]);
   const [openSources, setOpenSources] = useState<Record<string, boolean>>({});
-  const [openSql, setOpenSql] = useState<Record<string, boolean>>({});
   const [fileContentCache, setFileContentCache] = useState<Record<string, any>>({});
   const [loadingFile, setLoadingFile] = useState<Record<string, boolean>>({});
   const [tokenCount, setTokenCount] = useState(0);
@@ -312,7 +311,6 @@ export default function ChatPage() {
     handleStop();
     setMessages([]);
     setOpenSources({});
-    setOpenSql({});
     setTokenCount(0);
     textareaRef.current?.focus();
   };
@@ -521,8 +519,6 @@ export default function ChatPage() {
             {messages.map((msg) => {
               const isAssistant = msg.role === 'assistant';
               const isStreaming = msg.isStreaming === true;
-              const showSqlKey = msg.id + '-sql';
-              const showSql = openSql[showSqlKey] || false;
               const isGreeting = msg.mode === 'GREETING';
               const isDenied = msg.mode === 'DENIED';
 
@@ -584,7 +580,7 @@ export default function ChatPage() {
                       <div className="chat-msg-badges">
                         {msg.sql ? (
                           <span className="chat-badge chat-badge--sql">
-                            <Database size={10} /> SQL query
+                            <Database size={10} /> Structured data
                           </span>
                         ) : (
                           <span className="chat-badge chat-badge--rag">
@@ -597,29 +593,6 @@ export default function ChatPage() {
                       </div>
                     )}
 
-                    {/* SQL viewer */}
-                    {isAssistant && msg.sql && !isStreaming && (
-                      <div className="chat-sql-section">
-                        <button
-                          className="chat-sql-toggle"
-                          onClick={() =>
-                            setOpenSql((prev) => ({
-                              ...prev,
-                              [showSqlKey]: !showSql,
-                            }))
-                          }
-                        >
-                          <Database size={12} />
-                          <span>{showSql ? 'Hide SQL' : 'View Generated SQL'}</span>
-                          {showSql ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                        </button>
-                        {showSql && (
-                          <pre className="chat-sql-pre">
-                            <code>{msg.sql}</code>
-                          </pre>
-                        )}
-                      </div>
-                    )}
 
                     {/* Sources */}
                     {isAssistant && !isStreaming && msg.sources && msg.sources.length > 0 && (

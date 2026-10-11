@@ -7,11 +7,12 @@ JWT dependency (get_current_user) used by all other routers.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials, HTTPBearer, HTTPAuthorizationCredentials
 
 from app.core.database import get_db_conn
 from app.core.security import create_access_token, decode_access_token, verify_password
+from app.core.limiter import limiter
 
 logger = logging.getLogger("FinSight.auth")
 
@@ -62,7 +63,8 @@ def _authenticate_basic(credentials: HTTPBasicCredentials = Depends(_basic)) -> 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @router.get("/login")
-def login(user: dict = Depends(_authenticate_basic)):
+@limiter.limit("5/minute")
+def login(request: Request, user: dict = Depends(_authenticate_basic)):
     """Exchange HTTP Basic credentials for a JWT access token."""
     token = create_access_token({"sub": user["username"], "role": user["role"]})
     return {

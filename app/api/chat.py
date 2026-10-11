@@ -11,10 +11,12 @@ import json
 import logging
 import re
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.core.limiter import limiter
+from app.core.cache import cache_manager
 from app.rag.classifier import detect_query_type_llm, is_conversational_query
 from app.rag.csv_query import ask_csv
 from app.rag.chain import ask_rag
@@ -169,7 +171,8 @@ def build_denial_message(reason: str, role: str) -> str:
 # ════════════════════════════════════════════════════════════════════════════════
 
 @router.post("/chat")
-async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def chat(request: Request, req: ChatRequest, user: dict = Depends(get_current_user)):
     role     = user["role"]
     username = user["username"]
     question = req.question
@@ -187,6 +190,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "fallback": False,
             "answer": build_denial_message(denial["reason"], role),
             "sources": [],
+            "cached": False,
         }
 
     # ── Conversational / greeting short-circuit ─────────────────────────────
@@ -203,6 +207,18 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "fallback": False,
             "answer": greeting_answer,
             "sources": [],
+            "cached": False,
+        }
+
+    # ── Role-Scoped Query Cache Check ──────────────────────────────────────
+    cache_key = cache_manager.build_cache_key(role, active_question)
+    cached_entry = cache_manager.get(cache_key)
+    if cached_entry:
+        logger.info(f"[Chat] Cache HIT for role='{role}' query='{active_question}'")
+        return {
+            **cached_entry,
+            "user": username,
+            "cached": True,
         }
 
     mode          = await asyncio.to_thread(detect_query_type_llm, active_question)
@@ -219,6 +235,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                         "fallback": False,
                         "answer": build_denial_message(result.get("answer", "Table not accessible."), role),
                         "sources": [],
+                        "cached": False,
                     }
                 raise ValueError(result.get("answer", "SQL failed"))
             if not result.get("answer", "").strip():
@@ -231,7 +248,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     else:
         result = await ask_rag(active_question, role)
 
-    return {
+    response_payload = {
         "user":     username,
         "role":     role,
         "mode":     mode,
@@ -241,9 +258,18 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         **( {"sql": result["sql"]} if "sql" in result else {} ),
     }
 
+    if response_payload["answer"] and mode != "DENIED":
+        cache_manager.set(cache_key, response_payload)
+
+    return {
+        **response_payload,
+        "cached": False,
+    }
+
 
 @router.post("/chat-stream")
-async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def chat_stream(request: Request, req: ChatRequest, user: dict = Depends(get_current_user)):
     role     = user["role"]
     username = user["username"]
     question = req.question
@@ -266,7 +292,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             for i in range(0, len(msg), 25):
                 yield json.dumps({"type": "token", "content": msg[i:i+25]}) + "\n"
                 await asyncio.sleep(0.008)
-            yield json.dumps({"type": "metadata", "sources": [], "fallback": False}) + "\n"
+            yield json.dumps({"type": "metadata", "sources": [], "fallback": False, "cached": False}) + "\n"
             return
 
         # ── Greeting / conversational short-circuit ─────────────────────────────
@@ -281,9 +307,26 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             for i in range(0, len(msg), 30):
                 yield json.dumps({"type": "token", "content": msg[i:i+30]}) + "\n"
                 await asyncio.sleep(0.008)
-            yield json.dumps({"type": "metadata", "sources": [], "fallback": False}) + "\n"
+            yield json.dumps({"type": "metadata", "sources": [], "fallback": False, "cached": False}) + "\n"
             return
 
+        # ── Role-Scoped Query Cache Check ──────────────────────────────────────
+        cache_key = cache_manager.build_cache_key(role, active_question)
+        cached_entry = cache_manager.get(cache_key)
+        if cached_entry:
+            logger.info(f"[ChatStream] Cache HIT for role='{role}' query='{active_question}'")
+            cached_answer = cached_entry.get("answer", "")
+            for i in range(0, len(cached_answer), 35):
+                yield json.dumps({"type": "token", "content": cached_answer[i:i+35]}) + "\n"
+                await asyncio.sleep(0.005)
+            yield json.dumps({
+                "type": "metadata",
+                "sources": cached_entry.get("sources", []),
+                "fallback": cached_entry.get("fallback", False),
+                "cached": True,
+                **( {"sql": cached_entry["sql"]} if "sql" in cached_entry else {} ),
+            }) + "\n"
+            return
 
         fallback_used = False
 
@@ -296,7 +339,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                         for i in range(0, len(msg), 25):
                             yield json.dumps({"type": "token", "content": msg[i:i+25]}) + "\n"
                             await asyncio.sleep(0.008)
-                        yield json.dumps({"type": "metadata", "sources": [], "fallback": False}) + "\n"
+                        yield json.dumps({"type": "metadata", "sources": [], "fallback": False, "cached": False}) + "\n"
                         return
                     raise ValueError(result.get("answer", "SQL failed"))
 
@@ -305,9 +348,18 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                 for i in range(0, len(answer), 30):
                     yield json.dumps({"type": "token", "content": answer[i:i+30]}) + "\n"
                     await asyncio.sleep(0.01)
+
+                if answer:
+                    cache_manager.set(cache_key, {
+                        "role": role, "mode": mode, "fallback": False,
+                        "answer": answer, "sources": result.get("sources", []),
+                        "sql": sql,
+                    })
+
                 yield json.dumps({
                     "type": "metadata", "sql": sql,
                     "sources": result.get("sources", []), "fallback": False,
+                    "cached": False,
                 }) + "\n"
                 return
             except Exception as exc:
@@ -336,9 +388,15 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
 
             if "could not find relevant information" in full_answer.lower():
                 sources = []
+            elif full_answer:
+                cache_manager.set(cache_key, {
+                    "role": role, "mode": mode, "fallback": fallback_used,
+                    "answer": full_answer, "sources": sources,
+                })
 
             yield json.dumps({
                 "type": "metadata", "sources": sources, "fallback": fallback_used,
+                "cached": False,
             }) + "\n"
 
         except Exception as exc:

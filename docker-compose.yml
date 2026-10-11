@@ -1,6 +1,15 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: finsight-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - finsight-network
+
   backend:
     build:
       context: .
@@ -15,8 +24,11 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - ANONYMIZED_TELEMETRY=False
       - CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - .:/app
+    depends_on:
+      - redis
     restart: unless-stopped
     networks:
       - finsight-network

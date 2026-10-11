@@ -16,12 +16,15 @@ os.environ.update({
     'GOOGLE_API_KEY': 'offline-test-key',
     'COHERE_API_KEY': '',
     'LANGCHAIN_API_KEY': '',
+    'RATE_LIMIT_ENABLED': 'false',
 })
 
 @pytest.fixture(scope='session', autouse=True)
 def init_test_db():
     from app.core.database import init_sqlite_schema, init_duckdb_schema
     from app.core.users import seed_default_users
+    from app.core.limiter import limiter
+    limiter.enabled = False
     init_sqlite_schema()
     init_duckdb_schema()
     seed_default_users()

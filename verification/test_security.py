@@ -1,13 +1,17 @@
 """Offline regression tests. Uses temporary stores; never imports the AI engine."""
 import os
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 _temporary = tempfile.TemporaryDirectory(prefix='finsight-security-')
 _root = Path(_temporary.name)
 (_root / 'uploads').mkdir(parents=True, exist_ok=True)
 os.environ.update(DB_NAME=str(_root / 'roles.db'), DUCKDB_NAME=str(_root / 'tables.duckdb'),
-                  UPLOAD_DIR=str(_root / 'uploads'), JWT_SECRET='offline-test-signing-secret-32-characters', APP_ENV='development')
+                  UPLOAD_DIR=str(_root / 'uploads'), JWT_SECRET='offline-test-signing-secret-32-characters', APP_ENV='development',
+                  RATE_LIMIT_ENABLED='false')
 
 import duckdb
 import pytest
@@ -18,6 +22,9 @@ from app.core.database import init_sqlite_schema, init_duckdb_schema, get_db_con
 from app.core.users import seed_default_users
 from app.core.security import hash_password, verify_password
 from app.core.sql_sandbox import query_authorized_tables
+from app.core.limiter import limiter
+
+limiter.enabled = False
 
 init_sqlite_schema()
 init_duckdb_schema()
