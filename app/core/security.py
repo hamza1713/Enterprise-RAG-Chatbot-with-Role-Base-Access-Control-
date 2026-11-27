@@ -28,6 +28,8 @@ else:
     JWT_SECRET_PATH.write_text(JWT_SECRET, encoding="utf-8")
     logger.info("[Security] Generated new JWT secret and saved to disk.")
 
+SESSION_SECRET: str = os.getenv("SESSION_SECRET", "").strip() or JWT_SECRET
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  JWT helpers
@@ -58,6 +60,8 @@ def hash_password(plain: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    if not hashed or not hashed.startswith("$2"):
+        return False
     try:
         return bcrypt.checkpw(plain.encode(), hashed.encode())
     except Exception:

@@ -1,386 +1,278 @@
 """
-app/rag/module.py — Production-grade RAG engine.
-
-Renamed from `app/rag_utils/rag_module.py`.
-All logic preserved exactly; only the import paths have been updated
-to use the new `app.core.config` and `app.rag.processors` modules.
-
-Key design points:
-  - Quota vs rate-limit are correctly distinguished.
-  - API retry-delay is extracted from the error message.
-  - _pause_on_quota_exhaustion marks ONLY the currently-failing document.
-  - expand_query is wrapped in asyncio.to_thread.
-  - Vectorstore singleton is protected by a threading.Lock.
-  - _reinit_vectorstore() replaces every reference in module scope.
+app/rag/module.py — Production RAG Engine backed by PostgreSQL 17 + pgvector,
+Docling-Serve PDF/OCR parsing, Contextual Retrieval, and Gemini Embedding 2.
 """
 
-import os, time, re, threading, sqlite3, queue, asyncio
-from pathlib import Path
-from typing import List
+from __future__ import annotations
 
-# Apply RAG env-vars before any LangChain imports
-import app.rag.config  # noqa: F401 — side-effect: sets GOOGLE_API_KEY etc.
+import asyncio
+import logging
+import os
+import re
+import threading
+from typing import Callable, List
 
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.retrievers import BaseRetriever
+# Apply RAG env-vars lazily before LangChain imports
+import app.rag.config  # noqa: F401
+
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import Runnable, RunnableLambda, RunnablePassthrough
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import ConfigDict
+from sqlalchemy import func, select, update
 
-try:
-    from langchain_cohere import CohereRerank
-    _COHERE_AVAILABLE = True
-except ImportError:
-    _COHERE_AVAILABLE = False
+from app.core.config import (
+    GEMINI_CHAT_MODEL,
+    GEMINI_LIGHT_MODEL,
+    cohere_api_key,
+    google_api_key,
+)
+from app.db.models import DocumentRecord
+from app.db.session import async_session, sync_session
+from app.rag.contextualizer import contextualize_chunks
+from app.rag.embeddings import GeminiEmbedding2Service
+from app.rag.pgvector_store import PgVectorHybridStore
+from app.rag.processors import (
+    CSVDocumentLoader,
+    CSVSemanticChunker,
+    DoclingServePDFParser,
+    MarkdownDocumentLoader,
+    MarkdownSemanticChunker,
+    PDFSemanticChunker,
+)
+from app.storage import get_storage_backend
 
-from app.core.config import google_api_key, cohere_api_key, CHROMA_DIR
-from app.core.database import get_db_conn
+logger = logging.getLogger("FinSight.rag")
 
-
-# ════════════════════════════════════════════════════════════════════════════════
-#  ERROR CLASSIFICATION  (single source of truth)
-# ════════════════════════════════════════════════════════════════════════════════
-
-def _classify_api_error(err: Exception) -> str:
-    s = str(err).lower()
-    hard_quota_signals = ["quota", "billing", "plan_limit", "exceeded your"]
-    if any(sig in s for sig in hard_quota_signals):
-        return "hard_quota"
-    if "429" in s or "resource exhausted" in s or "too many requests" in s:
-        return "transient_rate_limit"
-    return "other"
-
-
-def _parse_retry_delay(err: Exception, default: float) -> float:
-    s = str(err)
-    proto_match = re.search(r"retry_delay\s*\{[^}]*seconds:\s*(\d+)", s, re.IGNORECASE | re.DOTALL)
-    if proto_match:
-        return float(proto_match.group(1)) + 2.0
-    text_match = re.search(r"retry[_ ]in\s+(\d+\.?\d*)\s*s", s, re.IGNORECASE)
-    if text_match:
-        return float(text_match.group(1)) + 2.0
-    return default
+# Testable lazy singletons (zero DUMMY_KEY instantiation at import time)
+_factory_lock = threading.Lock()
+model = None
+hybrid_store: PgVectorHybridStore | None = None
+embeddings_service: GeminiEmbedding2Service | None = None
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-#  EMBEDDINGS — retrying wrapper
-# ════════════════════════════════════════════════════════════════════════════════
+def get_embeddings_service() -> GeminiEmbedding2Service:
+    global embeddings_service
+    if embeddings_service is None:
+        with _factory_lock:
+            if embeddings_service is None:
+                embeddings_service = GeminiEmbedding2Service()
+    return embeddings_service
 
-class RetryingEmbeddings(GoogleGenerativeAIEmbeddings):
-    """
-    Wraps GoogleGenerativeAIEmbeddings with smart retry logic:
-    - Transient 429 → wait the API-suggested delay, retry up to 10 times
-    - Hard quota     → raise immediately (caller decides what to do)
-    - Other errors   → raise immediately
-    """
-    _INITIAL_DELAY: float = 2.0
-    _MAX_DELAY:     float = 120.0
 
-    def _retry(self, fn, label: str):
-        delay = self._INITIAL_DELAY
-        for attempt in range(10):
-            try:
-                return fn()
-            except Exception as exc:
-                kind = _classify_api_error(exc)
-                if kind == "hard_quota":
-                    raise
-                if kind == "transient_rate_limit" and attempt < 9:
-                    wait = min(_parse_retry_delay(exc, delay), self._MAX_DELAY)
-                    print(
-                        f"[Embeddings] 429 on {label} — API says wait {wait:.1f}s "
-                        f"(attempt {attempt + 1}/10)"
-                    )
-                    time.sleep(wait)
-                    delay = min(delay * 2.0, self._MAX_DELAY)
-                    continue
-                raise
+def get_hybrid_store() -> PgVectorHybridStore:
+    global hybrid_store
+    if hybrid_store is None:
+        with _factory_lock:
+            if hybrid_store is None:
+                hybrid_store = PgVectorHybridStore(embeddings=get_embeddings_service())
+    return hybrid_store
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        batch_size = 100
-        results: list[list[float]] = []
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start: start + batch_size]
-            embeddings = self._retry(
-                lambda b=batch: super(RetryingEmbeddings, self).embed_documents(b),
-                label=f"batch {start // batch_size + 1}",
+
+def _build_chat_model(api_key: str):
+    fallback_names = [
+        m for m in [GEMINI_LIGHT_MODEL, "gemini-2.5-flash"] if m and m != GEMINI_CHAT_MODEL
+    ]
+    return ChatGoogleGenerativeAI(
+        model=GEMINI_CHAT_MODEL,
+        temperature=0.2,
+        google_api_key=api_key,
+        transport="rest",
+        max_retries=1,
+    ).with_fallbacks(
+        [
+            ChatGoogleGenerativeAI(
+                model=fallback_name,
+                temperature=0.2,
+                google_api_key=api_key,
+                transport="rest",
+                max_retries=1,
             )
-            results.extend(embeddings)
-        return results
+            for fallback_name in dict.fromkeys(fallback_names)
+        ]
+    )
 
-    def embed_query(self, text: str) -> list[float]:
-        return self._retry(
-            lambda: super(RetryingEmbeddings, self).embed_query(text),
-            label="query",
+
+def get_chat_model():
+    """Return lazily constructed Gemini chat model (or patched module.model override)."""
+    global model
+    if model is not None:
+        return model
+    with _factory_lock:
+        if model is None:
+            key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or google_api_key
+            if not key:
+                raise RuntimeError("GOOGLE_API_KEY is not configured")
+            model = _build_chat_model(key)
+    return model
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  DOCUMENT INGESTION PIPELINE (Docling/MD/CSV -> Chunk -> Contextualize -> Embed -> Postgres)
+# ════════════════════════════════════════════════════════════════════════════════
+
+
+async def ingest_single_document(
+    doc_id: int,
+    *,
+    cancel_check: Callable[[], asyncio.Future | object] | None = None,
+    progress_callback: Callable[[int, int, str], object] | None = None,
+) -> dict:
+    """
+    Execute full ingestion pipeline for one DocumentRecord:
+      1. Fetch file bytes from ObjectStorageBackend
+      2. Parse (PDF -> DoclingServePDFParser with pdfplumber fallback; MD/CSV -> loaders)
+      3. Chunk + Contextual Retrieval enrichment (gemini-3.5-flash-lite, Semaphore=4)
+      4. Batch embed via GeminiEmbedding2Service (1536 dims, title: ... | text: ...)
+      5. Atomically commit chunks + mark embedded=1 inside one Postgres transaction
+    """
+    async with async_session() as db:
+        doc_row = await db.scalar(select(DocumentRecord).where(DocumentRecord.id == doc_id))
+        if doc_row is None:
+            raise ValueError(f"Document {doc_id} not found")
+        filename = doc_row.filename
+        role = doc_row.role
+        object_key = doc_row.object_key
+
+    if cancel_check is not None:
+        await cancel_check()
+
+    storage = get_storage_backend()
+    raw_bytes = await storage.aget_bytes(object_key)
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext == ".pdf":
+        loaded_docs = await DoclingServePDFParser().parse_bytes(raw_bytes, filename, role)
+        parser_used = (
+            loaded_docs[0].metadata.get("parser_used", "pdfplumber")
+            if loaded_docs
+            else "pdfplumber"
         )
+    elif ext == ".md":
+        loaded_docs = await asyncio.to_thread(
+            MarkdownDocumentLoader().load_bytes, raw_bytes, filename, role
+        )
+        parser_used = "markdown"
+    elif ext == ".csv":
+        loaded_docs = await asyncio.to_thread(
+            CSVDocumentLoader().load_bytes, raw_bytes, filename, role
+        )
+        parser_used = "csv"
+    else:
+        raise ValueError(f"Unsupported file format for indexing: {filename}")
+
+    if not loaded_docs:
+        raise ValueError(f"Document '{filename}' produced empty text during extraction")
+
+    if cancel_check is not None:
+        await cancel_check()
+
+    if progress_callback is not None:
+        await progress_callback(1, 4, f"Parsed '{filename}' via {parser_used}; chunking…")
+
+    if ext == ".csv":
+        chunker = CSVSemanticChunker()
+    elif ext == ".md" or loaded_docs[0].metadata.get("format") == "markdown":
+        chunker = MarkdownSemanticChunker()
+    else:
+        chunker = PDFSemanticChunker()
+
+    splits: list[Document] = []
+    for doc in loaded_docs:
+        splits.extend(await asyncio.to_thread(chunker.chunk, doc))
+
+    if not splits:
+        raise ValueError(f"Document '{filename}' produced zero chunks")
+
+    full_text = "\n\n".join(doc.page_content for doc in loaded_docs)
+
+    async with async_session() as db:
+        await db.execute(
+            update(DocumentRecord)
+            .where(DocumentRecord.id == doc_id)
+            .values(total_chunks=len(splits), embedded_chunks=0, parser_used=parser_used)
+        )
+        await db.commit()
+
+    if progress_callback is not None:
+        await progress_callback(2, 4, f"Generating contextual headers for {len(splits)} chunks…")
+
+    enriched_chunks = await contextualize_chunks(splits, full_text, filename)
+
+    if cancel_check is not None:
+        await cancel_check()
+
+    if progress_callback is not None:
+        await progress_callback(3, 4, f"Embedding {len(enriched_chunks)} chunks (1536d)…")
+
+    vectors = await get_embeddings_service().aembed_documents(enriched_chunks)
+
+    if cancel_check is not None:
+        await cancel_check()
+
+    store = get_hybrid_store()
+    committed_count = await store.replace_document_chunks(
+        doc_id=doc_id,
+        role=role,
+        source=filename,
+        chunks=enriched_chunks,
+        vectors=vectors,
+        parser_used=parser_used,
+    )
+
+    if progress_callback is not None:
+        await progress_callback(4, 4, f"Committed {committed_count} chunks.")
+
+    return {
+        "doc_id": doc_id,
+        "filename": filename,
+        "role": role,
+        "parser_used": parser_used,
+        "chunks_committed": committed_count,
+    }
 
 
-# ── Vectorstore singleton + write lock ────────────────────────────────────────
-google_embeddings = RetryingEmbeddings(
-    model="models/gemini-embedding-2-preview",
-    google_api_key=google_api_key or "DUMMY_KEY",
-    transport="rest",
-    request_options={"timeout": 15.0},
-)
-
-from chromadb.config import Settings
-
-_chroma_settings = Settings(
-    anonymized_telemetry=False,
-    is_persistent=True,
-    persist_directory=str(CHROMA_DIR),
-)
-
-_vs_lock = threading.Lock()
-
-vectorstore = Chroma(
-    collection_name="my_collection",
-    persist_directory=str(CHROMA_DIR),
-    embedding_function=google_embeddings,
-    client_settings=_chroma_settings,
-)
-
-
-# Importing the application must not contact a model provider or erase an index.
-# Embedding migrations must be scheduled explicitly after backing up all stores.
-
-
-# ════════════════════════════════════════════════════════════════════════════════
-#  DOCUMENT INDEXER — single background worker via Queue
-# ════════════════════════════════════════════════════════════════════════════════
-
-from app.rag.processors import DocumentLoaderFactory, ChunkerFactory
-
-_index_queue:    queue.Queue    = queue.Queue()
-_worker_started: bool           = False
-_worker_lock:    threading.Lock = threading.Lock()
-
-
-def start_indexer_worker() -> None:
-    global _worker_started
-    with _worker_lock:
-        if not _worker_started:
-            t = threading.Thread(target=_indexer_worker, daemon=True, name="IndexerWorker")
-            t.start()
-            _worker_started = True
-            print("[Indexer] Background worker thread started.")
-
-
-def trigger_indexing() -> None:
-    start_indexer_worker()
-    _index_queue.put(True)
+def _sync_dispatch_taskiq(coro_fn, *args) -> None:
+    """Best-effort dispatch helper for sync compatibility shims."""
+    try:
+        asyncio.get_running_loop()
+        # Caller is inside an active loop; API routes should call broker tasks directly.
+        return
+    except RuntimeError:
+        asyncio.run(coro_fn(*args))
 
 
 def run_indexer() -> None:
-    """Public compatibility shim for lifespan / upload endpoints."""
-    trigger_indexing()
+    """Queue indexing jobs for all unembedded documents (embedded=0)."""
+    from app.workers.tasks import enqueue_pending_documents
+
+    _sync_dispatch_taskiq(enqueue_pending_documents)
 
 
 def trigger_retry_pending() -> None:
-    """Reset failed docs back to pending and re-trigger the worker."""
-    try:
-        conn = get_db_conn()
-        conn.execute("UPDATE documents SET embedded=0, embedded_chunks=0 WHERE embedded=-1")
-        conn.commit()
-        conn.close()
-        print("[Indexer] Failed documents reset to pending for retry.")
-    except Exception as exc:
-        print(f"[Indexer] Error resetting failed docs: {exc}")
-    trigger_indexing()
+    """Reset failed documents to pending (embedded=0) and enqueue durable worker jobs."""
+    from app.workers.tasks import enqueue_retry_failed_job
+
+    _sync_dispatch_taskiq(enqueue_retry_failed_job)
 
 
-def _indexer_worker() -> None:
-    while True:
-        try:
-            _index_queue.get()
-            _run_indexing_loop()
-            _index_queue.task_done()
-        except Exception as exc:
-            print(f"[IndexerWorker] Unexpected error: {exc}")
-            time.sleep(2.0)
-
-
-def _mark_failed(doc_id: int) -> None:
-    try:
-        conn = get_db_conn()
-        conn.execute("UPDATE documents SET embedded=-1 WHERE id=?", (doc_id,))
-        conn.commit()
-        conn.close()
-    except Exception as exc:
-        print(f"[Indexer] Error marking doc {doc_id} failed: {exc}")
-
-
-def _mark_embedded(doc_id: int) -> None:
-    try:
-        conn = get_db_conn()
-        conn.execute("UPDATE documents SET embedded=1 WHERE id=?", (doc_id,))
-        conn.commit()
-        conn.close()
-    except Exception as exc:
-        print(f"[Indexer] Error marking doc {doc_id} embedded: {exc}")
-
-
-def _run_indexing_loop() -> None:
-    """Process every unembedded (embedded=0) document in order."""
-    while True:
-        try:
-            conn = get_db_conn()
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT id, filepath, role FROM documents WHERE embedded=0"
-            ).fetchall()
-            conn.close()
-        except Exception as exc:
-            print(f"[Indexer] Failed to query SQLite: {exc}")
-            time.sleep(2.0)
-            break
-
-        if not rows:
-            break
-
-        for row in rows:
-            doc_id   = row["id"]
-            filepath = row["filepath"]
-            role     = row["role"]
-            name     = Path(filepath).name
-            print(f"[Indexer] ▶ {name} (role={role}, id={doc_id})")
-
-            # 1. Load
-            try:
-                loader = DocumentLoaderFactory.get_loader(filepath)
-                docs   = loader.load(filepath, role)
-            except Exception as load_err:
-                kind = _classify_api_error(load_err)
-                print(f"[Indexer] ✗ Load failed for {name}: {load_err}")
-                if kind == "hard_quota":
-                    _handle_hard_quota(doc_id, "load")
-                    return
-                _mark_failed(doc_id)
-                continue
-
-            if not docs:
-                print(f"[Indexer] ⚠ {name} loaded empty.")
-                _mark_failed(doc_id)
-                continue
-
-            # 2. Chunk
-            try:
-                chunker = ChunkerFactory.get_chunker(filepath)
-                splits: list[Document] = []
-                for doc in docs:
-                    splits.extend(chunker.chunk(doc))
-            except Exception as chunk_err:
-                kind = _classify_api_error(chunk_err)
-                print(f"[Indexer] ✗ Chunk failed for {name}: {chunk_err}")
-                if kind == "hard_quota":
-                    _handle_hard_quota(doc_id, "chunking")
-                    return
-                _mark_failed(doc_id)
-                continue
-
-            if not splits:
-                print(f"[Indexer] ⚠ {name} produced no chunks.")
-                _mark_failed(doc_id)
-                continue
-
-            # 3. Embed & write to vectorstore
-            try:
-                _embed_chunks_to_vectorstore(splits, doc_id=doc_id)
-                _mark_embedded(doc_id)
-                print(f"[Indexer] ✓ {name} — {len(splits)} chunks indexed.")
-            except Exception as embed_err:
-                kind = _classify_api_error(embed_err)
-                print(f"[Indexer] ✗ Embed failed for {name}: {embed_err}")
-                if kind == "hard_quota":
-                    _handle_hard_quota(doc_id, "embedding")
-                    return
-                if kind == "transient_rate_limit":
-                    wait = _parse_retry_delay(embed_err, 30.0)
-                    print(f"[Indexer] Rate-limit on {name} — waiting {wait:.0f}s before next doc.")
-                    _mark_failed(doc_id)
-                    time.sleep(wait)
-                    continue
-                _mark_failed(doc_id)
-
-
-def _handle_hard_quota(current_doc_id: int, phase: str) -> None:
-    print(
-        f"[Indexer] 🛑 Hard quota exhaustion during '{phase}' "
-        f"(doc_id={current_doc_id}). "
-        f"Marking this doc failed; other pending docs untouched — "
-        f"use 'Retry Failed/Pending' when quota is restored."
-    )
-    _mark_failed(current_doc_id)
-
-
-_CHROMA_BATCH = 100
-
-
-def _embed_chunks_to_vectorstore(splits: list[Document], doc_id: int) -> None:
-    """Embed in batches of 100, updating SQLite chunk progress and writing to FTS5 & Chroma."""
-    total = len(splits)
-
-    # 1. Attach deterministic identifiers to each split
-    fts_rows = []
-    for idx, doc in enumerate(splits):
-        chunk_id = f"{doc_id}_{idx}"
-        doc.metadata["chunk_id"] = chunk_id
-        doc.metadata["doc_id"] = str(doc_id)
-        role = str(doc.metadata.get("role", "general")).lower()
-        source = str(doc.metadata.get("source", "unknown"))
-        fts_rows.append((chunk_id, str(doc_id), role, source, doc.page_content))
-
-    # 2. Synchronize SQLite metadata & FTS5 full-text table
-    try:
-        conn = get_db_conn()
-        conn.execute(
-            "UPDATE documents SET total_chunks=?, embedded_chunks=0 WHERE id=?",
-            (total, doc_id),
-        )
-        conn.execute("DELETE FROM document_chunks_fts WHERE doc_id = ?", (str(doc_id),))
-        conn.executemany(
-            "INSERT INTO document_chunks_fts (chunk_id, doc_id, role, source, content) VALUES (?, ?, ?, ?, ?)",
-            fts_rows,
-        )
-        conn.commit()
-        conn.close()
-    except Exception as exc:
-        print(f"[Indexer] Warning: couldn't sync FTS5 table: {exc}")
-
-    # 3. Clean any existing chunks for this document from Chroma vector store
-    with _vs_lock:
-        try:
-            vectorstore.delete(where={"doc_id": str(doc_id)})
-        except Exception:
-            pass
-
-    # 4. Write new batches to vectorstore
-    done = 0
-    for start in range(0, total, _CHROMA_BATCH):
-        batch = splits[start: start + _CHROMA_BATCH]
-        with _vs_lock:
-            vectorstore.add_documents(batch)
-        done += len(batch)
-        try:
-            conn = get_db_conn()
-            conn.execute(
-                "UPDATE documents SET embedded_chunks=? WHERE id=?",
-                (min(done, total), doc_id),
-            )
-            conn.commit()
-            conn.close()
-        except Exception as exc:
-            print(f"[Indexer] Warning: couldn't update embedded_chunks: {exc}")
+def trigger_full_reindex() -> dict:
+    """Mark active docs pending (preserving live chunks until committed) and enqueue full reindex."""
+    with sync_session() as db:
+        total = int(db.scalar(select(func.count()).select_from(DocumentRecord)) or 0)
+        db.execute(update(DocumentRecord).values(embedded=0, embedded_chunks=0, last_error=None))
+        db.commit()
+    return {"queued_docs": total, "pruned_orphan_docs": 0}
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  PROMPT & MODEL
+#  PROMPT & QUERY EXPANSION
 # ════════════════════════════════════════════════════════════════════════════════
+
 
 def build_system_prompt(user_role: str) -> str:
     return (
@@ -406,28 +298,8 @@ def build_system_prompt(user_role: str) -> str:
     )
 
 
-model = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0.2,
-    google_api_key=google_api_key or "DUMMY_KEY",
-    transport="rest",
-    max_retries=1,
-).with_fallbacks([
-    ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.2,
-                           google_api_key=google_api_key or "DUMMY_KEY", transport="rest",
-                           max_retries=1),
-    ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.2,
-                           google_api_key=google_api_key or "DUMMY_KEY", transport="rest",
-                           max_retries=1),
-])
-
-
-# ════════════════════════════════════════════════════════════════════════════════
-#  QUERY EXPANSION
-# ════════════════════════════════════════════════════════════════════════════════
-
 def expand_query(question: str) -> list[str]:
-    """Generate up to 3 semantic variants of the user query."""
+    """Generate semantic query variants cleanly using lazy get_chat_model()."""
     queries = [question]
     try:
         prompt = (
@@ -438,101 +310,32 @@ def expand_query(question: str) -> list[str]:
             "- Output exactly 3 lines, one query per line. No numbering, no explanation.\n"
             f"User Query: {question}"
         )
-        response = model.invoke(prompt)
-        for line in response.content.strip().split("\n"):
+        response = get_chat_model().invoke(prompt)
+        content = response.content if hasattr(response, "content") else str(response)
+        for line in content.strip().split("\n"):
             cleaned = re.sub(r"^[-*•\d\.\s]+", "", line).strip()
             if cleaned and cleaned not in queries and len(queries) < 4:
                 queries.append(cleaned)
     except Exception as exc:
-        print(f"[QueryExpansion] Skipped ({type(exc).__name__})")
+        logger.debug(f"[QueryExpansion] Skipped ({type(exc).__name__})")
     return queries
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-#  HYBRID MULTI-QUERY RETRIEVER
+#  HYBRID PGVECTOR + TSVECTOR RETRIEVER
 # ════════════════════════════════════════════════════════════════════════════════
+
 
 class HybridMultiQueryRetriever(BaseRetriever):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    user_role:            str
-    cohere_key:           str | None = None
-    min_relevance_score:  float = 0.15
-
-    def _build_role_filter(self) -> dict | None:
-        role_lower = self.user_role.lower()
-        if role_lower == "c-level":   return None
-        if role_lower == "general":   return {"role": "general"}
-        return {"role": {"$in": [role_lower, "general"]}}
-
-    def _search_with_scores(self, query: str, role_filter: dict | None, k: int = 15) -> list[tuple]:
-        try:
-            kwargs: dict = {"query": query, "k": k}
-            if role_filter:
-                kwargs["filter"] = role_filter
-            return vectorstore.similarity_search_with_relevance_scores(**kwargs)
-        except Exception:
-            search_kwargs: dict = {"k": k}
-            if role_filter:
-                search_kwargs["filter"] = role_filter
-            docs = vectorstore.similarity_search(query, **search_kwargs)
-            return [(doc, 1.0) for doc in docs]
+    user_role: str
+    cohere_key: str | None = None
+    min_relevance_score: float = 0.15
 
     def _search_fts5(self, query: str, limit: int = 25) -> list[Document]:
-        """Search SQLite FTS5 index using BM25 with strict role scoping."""
-        tokens = re.findall(r"\w+", query)
-        valid_tokens = [t for t in tokens if len(t) >= 2]
-        if not valid_tokens:
-            return []
-        fts_expr = " OR ".join(f'"{t}"' for t in valid_tokens[:12])
-        role_lower = self.user_role.lower()
-        results: list[Document] = []
-        try:
-            conn = get_db_conn()
-            if role_lower == "c-level":
-                sql = """
-                    SELECT chunk_id, doc_id, role, source, content, bm25(document_chunks_fts) as rank
-                    FROM document_chunks_fts
-                    WHERE document_chunks_fts MATCH ?
-                    ORDER BY rank
-                    LIMIT ?
-                """
-                rows = conn.execute(sql, (fts_expr, limit)).fetchall()
-            elif role_lower == "general":
-                sql = """
-                    SELECT chunk_id, doc_id, role, source, content, bm25(document_chunks_fts) as rank
-                    FROM document_chunks_fts
-                    WHERE document_chunks_fts MATCH ? AND LOWER(role) = 'general'
-                    ORDER BY rank
-                    LIMIT ?
-                """
-                rows = conn.execute(sql, (fts_expr, limit)).fetchall()
-            else:
-                sql = """
-                    SELECT chunk_id, doc_id, role, source, content, bm25(document_chunks_fts) as rank
-                    FROM document_chunks_fts
-                    WHERE document_chunks_fts MATCH ? AND (LOWER(role) = ? OR LOWER(role) = 'general')
-                    ORDER BY rank
-                    LIMIT ?
-                """
-                rows = conn.execute(sql, (fts_expr, role_lower, limit)).fetchall()
-            conn.close()
-
-            for r in rows:
-                results.append(Document(
-                    page_content=r[4],
-                    metadata={
-                        "chunk_id": r[0],
-                        "doc_id": r[1],
-                        "role": r[2],
-                        "source": r[3],
-                        "chunk_type": "text",
-                        "bm25_rank": float(r[5]),
-                    }
-                ))
-        except Exception:
-            pass
-        return results
+        """Run role-scoped PostgreSQL TSVector lexical search."""
+        return get_hybrid_store().lexical_search(query, self.user_role, limit=limit)
 
     def _get_relevant_documents(
         self,
@@ -540,107 +343,146 @@ class HybridMultiQueryRetriever(BaseRetriever):
         *,
         run_manager: CallbackManagerForRetrieverRun = None,
     ) -> List[Document]:
-        role_filter = self._build_role_filter()
-        queries     = expand_query(query)
-        print(f"[Retrieval] Multi-Query: {queries}")
+        store = get_hybrid_store()
+        queries = expand_query(query)
+        logger.info(f"[Retrieval] Multi-Query variants={len(queries)} role={self.user_role}")
 
-        all_docs: list[Document] = []
-        seen:     set[int]       = set()
+        candidates_map: dict[str, Document] = {}
+        rrf_scores: dict[str, float] = {}
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        def search_single(q):
+        for variant in queries:
             try:
-                return self._search_with_scores(q, role_filter, k=20)
+                docs = store.search(
+                    variant,
+                    self.user_role,
+                    limit=12,
+                    rerank=False,
+                    cohere_key=self.cohere_key,
+                )
             except Exception as exc:
-                print(f"[Retrieval] Search failed for variant '{q}': {exc}")
-                return []
+                logger.warning(f"[Retrieval] Hybrid variant search failed: {exc}")
+                docs = []
 
-        with ThreadPoolExecutor(max_workers=len(queries)) as executor:
-            futures = {executor.submit(search_single, q): q for q in queries}
-            for future in as_completed(futures):
-                for doc, score in future.result():
-                    if score >= self.min_relevance_score:
-                        h = hash(doc.page_content)
-                        if h not in seen:
-                            seen.add(h)
-                            doc.metadata["relevance_score"] = round(score, 4)
-                            all_docs.append(doc)
+            for rank, doc in enumerate(docs):
+                key = str(doc.metadata.get("chunk_id") or hash(doc.page_content))
+                if key not in candidates_map:
+                    candidates_map[key] = doc
+                rrf_scores[key] = rrf_scores.get(key, 0.0) + float(
+                    doc.metadata.get("rrf_score") or (1.0 / (60.0 + rank + 1))
+                )
 
-        summary_docs = [d for d in all_docs if d.metadata.get("chunk_type") == "doc_summary"]
-        content_docs = [d for d in all_docs if d.metadata.get("chunk_type") != "doc_summary"]
-        summary_docs.sort(key=lambda d: d.metadata.get("relevance_score", 0), reverse=True)
-        content_docs.sort(key=lambda d: d.metadata.get("relevance_score", 0), reverse=True)
-        dense_candidates = (summary_docs + content_docs)[:30]
-
-        # 2. Sparse lexical BM25 search via SQLite FTS5
-        sparse_candidates = self._search_fts5(query, limit=25)
-
-        # 3. Reciprocal Rank Fusion (RRF: k=60)
-        rrf_scores: dict[int, float] = {}
-        doc_map: dict[int, Document] = {}
-
-        for rank, doc in enumerate(dense_candidates):
-            h = hash(doc.page_content)
-            doc_map[h] = doc
-            rrf_scores[h] = rrf_scores.get(h, 0.0) + (1.0 / (60.0 + rank + 1))
-
-        for rank, doc in enumerate(sparse_candidates):
-            h = hash(doc.page_content)
-            if h not in doc_map:
-                doc_map[h] = doc
-            rrf_scores[h] = rrf_scores.get(h, 0.0) + (1.0 / (60.0 + rank + 1))
-
-        candidates = sorted(
-            doc_map.values(),
-            key=lambda d: rrf_scores.get(hash(d.page_content), 0.0),
+        fused = sorted(
+            candidates_map.values(),
+            key=lambda d: rrf_scores.get(str(d.metadata.get("chunk_id") or hash(d.page_content)), 0.0),
             reverse=True,
         )[:30]
 
-        print(
-            f"[Retrieval] Fused {len(candidates)} candidates "
-            f"({len(dense_candidates)} dense + {len(sparse_candidates)} sparse BM25)"
-        )
-
-        if not candidates:
+        if not fused:
             return []
 
-        cohere_key_to_use = self.cohere_key or cohere_api_key
-        if cohere_key_to_use and _COHERE_AVAILABLE and len(candidates) > 1:
-            try:
-                reranker = CohereRerank(
-                    cohere_api_key=cohere_key_to_use,
-                    model="rerank-english-v3.0",
-                    top_n=min(6, len(candidates)),
-                )
-                reranked = reranker.compress_documents(documents=candidates, query=query)
-                print(f"[Retrieval] Cohere → top {len(reranked)} docs")
-                return list(reranked)
-            except Exception as exc:
-                print(f"[Retrieval] Rerank skipped ({type(exc).__name__})")
+        return store._rerank_if_configured(
+            query=query,
+            candidates=fused,
+            top_n=6,
+            cohere_key=self.cohere_key or cohere_api_key,
+        )
 
-        return candidates[:6]
+    async def _aget_relevant_documents(
+        self,
+        query: str,
+        *,
+        run_manager=None,
+    ) -> List[Document]:
+        store = get_hybrid_store()
+        queries = await asyncio.to_thread(expand_query, query)
+
+        async def _run_variant(q: str) -> list[Document]:
+            try:
+                return await store.asearch(
+                    q,
+                    self.user_role,
+                    limit=12,
+                    rerank=False,
+                    cohere_key=self.cohere_key,
+                )
+            except Exception as exc:
+                logger.warning(f"[Retrieval] Async hybrid variant search failed: {exc}")
+                return []
+
+        variant_results = await asyncio.gather(*(_run_variant(q) for q in queries))
+        candidates_map: dict[str, Document] = {}
+        rrf_scores: dict[str, float] = {}
+
+        for docs in variant_results:
+            for rank, doc in enumerate(docs):
+                key = str(doc.metadata.get("chunk_id") or hash(doc.page_content))
+                if key not in candidates_map:
+                    candidates_map[key] = doc
+                rrf_scores[key] = rrf_scores.get(key, 0.0) + float(
+                    doc.metadata.get("rrf_score") or (1.0 / (60.0 + rank + 1))
+                )
+
+        fused = sorted(
+            candidates_map.values(),
+            key=lambda d: rrf_scores.get(str(d.metadata.get("chunk_id") or hash(d.page_content)), 0.0),
+            reverse=True,
+        )[:30]
+
+        if not fused:
+            return []
+
+        return await asyncio.to_thread(
+            store._rerank_if_configured,
+            query,
+            fused,
+            6,
+            self.cohere_key or cohere_api_key,
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════════
 #  RAG CHAIN
 # ════════════════════════════════════════════════════════════════════════════════
 
+
+class _DynamicModelAnswerRunnable(Runnable):
+    """Stream tokens through LCEL StrOutputParser while keeping lazy/patchable model lookup."""
+
+    def invoke(self, input, config=None, **kwargs):
+        active_model = get_chat_model()
+        if isinstance(active_model, Runnable):
+            return (active_model | StrOutputParser()).invoke(input, config=config)
+        response = active_model.invoke(input)
+        return response.content if hasattr(response, "content") else str(response)
+
+    async def astream(self, input, config=None, **kwargs):
+        active_model = get_chat_model()
+        if isinstance(active_model, Runnable):
+            async for chunk in (active_model | StrOutputParser()).astream(input, config=config):
+                if chunk:
+                    yield chunk
+        else:
+            response = await asyncio.to_thread(active_model.invoke, input)
+            text_out = response.content if hasattr(response, "content") else str(response)
+            if text_out:
+                yield text_out
+
+
 def get_rag_chain(user_role: str, cohere_api_key: str | None = None):
     """
-    Build a RAG chain using pure langchain_core LCEL runnables.
-    Returns a runnable that accepts {"input": str} and produces
-    {"answer": str, "context": list[Document], "input": str}.
+    Build a composable LCEL RAG chain supporting sync .invoke() and async .astream().
     """
     retriever = HybridMultiQueryRetriever(
         user_role=user_role,
         cohere_key=cohere_api_key,
     )
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", build_system_prompt(user_role)),
-        ("human", "{input}"),
-    ])
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", build_system_prompt(user_role)),
+            ("human", "{input}"),
+        ]
+    )
 
     def format_docs(docs: list[Document]) -> str:
         parts = []
@@ -649,15 +491,21 @@ def get_rag_chain(user_role: str, cohere_api_key: str | None = None):
             parts.append(f"--- SOURCE: {src} ---\n{doc.page_content}\n--- END SOURCE ---")
         return "\n\n".join(parts)
 
-    def build_output(inputs: dict) -> dict:
-        """Replicates the create_retrieval_chain output schema."""
-        question  = inputs["input"]
-        context   = retriever.invoke(question)
-        formatted = format_docs(context)
-        # Fill the {context} placeholder in the system prompt
-        filled_prompt = prompt.format_messages(input=question, context=formatted)
-        response = model.invoke(filled_prompt)
-        answer = response.content if hasattr(response, "content") else str(response)
-        return {"input": question, "context": context, "answer": answer}
+    async def _aretrieve(x):
+        return await retriever._aget_relevant_documents(x["input"])
 
-    return RunnableLambda(build_output)
+    retrieval = RunnablePassthrough.assign(
+        context=RunnableLambda(
+            func=lambda x: retriever.invoke(x["input"]),
+            afunc=_aretrieve,
+        )
+    )
+    answer_chain = (
+        RunnableLambda(
+            lambda x: prompt.format_messages(
+                input=x["input"], context=format_docs(x["context"])
+            )
+        )
+        | _DynamicModelAnswerRunnable()
+    )
+    return retrieval.assign(answer=answer_chain)

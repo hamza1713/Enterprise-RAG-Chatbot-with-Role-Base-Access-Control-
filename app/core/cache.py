@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any
 
@@ -25,48 +26,55 @@ class InMemoryTTLCache:
     def __init__(self, max_size: int = 1000):
         self._store: dict[str, tuple[Any, float]] = {}
         self._max_size = max_size
+        self._lock = threading.RLock()
 
     def get(self, key: str) -> Any | None:
         now = time.time()
-        entry = self._store.get(key)
-        if entry is None:
-            return None
-        value, expires_at = entry
-        if expires_at and now > expires_at:
-            self._store.pop(key, None)
-            return None
-        return value
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            value, expires_at = entry
+            if expires_at and now > expires_at:
+                self._store.pop(key, None)
+                return None
+            return value
 
     def set(self, key: str, value: Any, ttl: int = 3600) -> bool:
         now = time.time()
-        # Evict expired entries if approaching max size
-        if len(self._store) >= self._max_size:
-            self._cleanup_expired(now)
+        with self._lock:
+            # Evict expired entries if approaching max size
             if len(self._store) >= self._max_size:
-                # Remove oldest entry
-                oldest_key = next(iter(self._store))
-                self._store.pop(oldest_key, None)
+                self._cleanup_expired(now)
+                if len(self._store) >= self._max_size:
+                    # Remove oldest entry
+                    oldest_key = next(iter(self._store))
+                    self._store.pop(oldest_key, None)
 
-        expires_at = now + ttl if ttl > 0 else 0
-        self._store[key] = (value, expires_at)
-        return True
+            expires_at = now + ttl if ttl > 0 else 0
+            self._store[key] = (value, expires_at)
+            return True
 
     def delete(self, key: str) -> bool:
-        return self._store.pop(key, None) is not None
+        with self._lock:
+            return self._store.pop(key, None) is not None
 
     def delete_prefix(self, prefix: str) -> int:
-        keys_to_delete = [k for k in list(self._store.keys()) if k.startswith(prefix)]
-        for k in keys_to_delete:
-            self._store.pop(k, None)
-        return len(keys_to_delete)
+        with self._lock:
+            keys_to_delete = [k for k in list(self._store.keys()) if k.startswith(prefix)]
+            for k in keys_to_delete:
+                self._store.pop(k, None)
+            return len(keys_to_delete)
 
     def clear(self) -> None:
-        self._store.clear()
+        with self._lock:
+            self._store.clear()
 
     def _cleanup_expired(self, now: float) -> None:
-        expired = [k for k, (_, exp) in self._store.items() if exp and now > exp]
-        for k in expired:
-            self._store.pop(k, None)
+        with self._lock:
+            expired = [k for k, (_, exp) in list(self._store.items()) if exp and now > exp]
+            for k in expired:
+                self._store.pop(k, None)
 
 
 class CacheManager:
@@ -104,15 +112,64 @@ class CacheManager:
         q = re.sub(r"[?!.,;]+$", "", q).strip()
         return q
 
-    def build_cache_key(self, role: str, question: str) -> str:
+    @staticmethod
+    def compute_acl_fingerprint(
+        doc_ids: list[int] | set[int] | None = None,
+        dataset_names: list[str] | set[str] | None = None,
+    ) -> str:
         """
-        Generate a secure, role-scoped cache key.
-        Security Rule: Role MUST be prepended to guarantee zero cross-role data leaks.
+        Hash a principal's effective ReBAC authorization set so any document grant,
+        revocation, upload, or deletion instantaneously produces a new cache namespace.
+        """
+        if doc_ids is None and dataset_names is None:
+            return "default"
+        payload = {
+            "d": sorted({int(d) for d in (doc_ids or [])}),
+            "t": sorted({str(t).strip().lower() for t in (dataset_names or []) if str(t).strip()}),
+        }
+        raw = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+    def build_cache_key(
+        self,
+        role: str,
+        question: str,
+        history: list[Any] | None = None,
+        *,
+        username: str | None = None,
+        acl_fingerprint: str | None = None,
+    ) -> str:
+        """
+        Generate a principal- and ACL-scoped cache key.
+        Security Rule:
+          - Keeps `finsight:cache:{role}:` prefix so role invalidation remains exact.
+          - Scopes by username + acl_fingerprint so per-user ReBAC grants/revocations
+            never leak cached answers across users within the same department role.
         """
         clean_role = (role or "general").strip().lower()
+        user_seg = (
+            hashlib.sha256(username.strip().lower().encode("utf-8")).hexdigest()[:10]
+            if username and username.strip()
+            else "roleonly"
+        )
+        acl_seg = (acl_fingerprint or "default").strip().lower()
         clean_q = self.normalize_question(question)
-        digest = hashlib.sha256(clean_q.encode("utf-8")).hexdigest()[:32]
-        return f"finsight:cache:{clean_role}:{digest}"
+        payload = clean_q
+        if history:
+            hist_parts: list[str] = []
+            for item in history[-6:]:
+                if isinstance(item, dict):
+                    msg_role = str(item.get("role", "")).strip().lower()
+                    msg_content = self.normalize_question(str(item.get("content", "")))
+                else:
+                    msg_role = str(getattr(item, "role", "")).strip().lower()
+                    msg_content = self.normalize_question(str(getattr(item, "content", "")))
+                if msg_content:
+                    hist_parts.append(f"{msg_role}:{msg_content}")
+            if hist_parts:
+                payload = json.dumps({"q": clean_q, "h": hist_parts}, sort_keys=True)
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+        return f"finsight:cache:{clean_role}:{user_seg}:{acl_seg}:{digest}"
 
     def get(self, key: str) -> dict | None:
         if self.using_redis and self.redis_client:
@@ -138,14 +195,26 @@ class CacheManager:
 
         return self.memory_cache.set(key, value, ttl=ttl)
 
+    def _delete_redis_pattern(self, pattern: str) -> int:
+        if not (self.using_redis and self.redis_client):
+            return 0
+        deleted = 0
+        batch: list[Any] = []
+        for key in self.redis_client.scan_iter(match=pattern, count=500):
+            batch.append(key)
+            if len(batch) >= 500:
+                deleted += int(self.redis_client.delete(*batch))
+                batch.clear()
+        if batch:
+            deleted += int(self.redis_client.delete(*batch))
+        return deleted
+
     def delete_prefix(self, prefix: str) -> int:
         """Invalidate all keys matching prefix (e.g. finsight:cache:hr:)."""
         deleted_count = self.memory_cache.delete_prefix(prefix)
         if self.using_redis and self.redis_client:
             try:
-                keys = self.redis_client.keys(f"{prefix}*")
-                if keys:
-                    deleted_count += self.redis_client.delete(*keys)
+                deleted_count += self._delete_redis_pattern(f"{prefix}*")
             except Exception as exc:
                 logger.warning(f"[CacheManager] Redis DELETE_PREFIX error: {exc}")
         return deleted_count
@@ -154,9 +223,7 @@ class CacheManager:
         self.memory_cache.clear()
         if self.using_redis and self.redis_client:
             try:
-                keys = self.redis_client.keys("finsight:cache:*")
-                if keys:
-                    self.redis_client.delete(*keys)
+                self._delete_redis_pattern("finsight:cache:*")
             except Exception as exc:
                 logger.warning(f"[CacheManager] Redis CLEAR error: {exc}")
 

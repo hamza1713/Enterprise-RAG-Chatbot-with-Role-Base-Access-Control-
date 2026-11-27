@@ -17,10 +17,11 @@ Produces columns required by RAGAS:
 
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
 import sys
 import time
-import logging
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -39,12 +40,22 @@ def _get_rag_chain(role: str):
 
 
 def _get_gemini_model():
-    from app.core.config import google_api_key
+    from app.core.config import GEMINI_CHAT_MODEL, google_api_key
     from langchain_google_genai import ChatGoogleGenerativeAI
+
+    key = (
+        os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or google_api_key
+        or ""
+    ).strip()
+    if not key:
+        raise RuntimeError("GOOGLE_API_KEY is required for RAGAS dataset generation.")
+
     return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model=GEMINI_CHAT_MODEL,
         temperature=0.2,
-        google_api_key=google_api_key or "DUMMY_KEY",
+        google_api_key=key,
         transport="rest",
         max_retries=1,
     )
@@ -247,11 +258,11 @@ def load_ragas_dataset_from_csv(
 
         answer, contexts = _run_rag_for_role(question, role)
 
-        # Fallback: prevent RAGAS from crashing on empty context
+        # Preserve true retrieval/generation gaps instead of masking with ground_truth
         if not contexts:
-            contexts = [ground_truth]
+            contexts = [""]
         if not answer:
-            answer = ground_truth
+            answer = ""
 
         rows.append({
             "user_input":          question,
@@ -293,9 +304,9 @@ def load_builtin_dataset_with_rag(
         logger.info(f"[EvalDataset] Builtin [{i+1}/{len(pairs)}] role={pair['role']}")
         answer, contexts = _run_rag_for_role(pair["question"], pair["role"])
         if not contexts:
-            contexts = [pair["ground_truth"]]
+            contexts = [""]
         if not answer:
-            answer = pair["ground_truth"]
+            answer = ""
         rows.append({
             "user_input":          pair["question"],
             "response":            answer,
@@ -346,8 +357,9 @@ def generate_ragas_dataset(
     Returns a RAGAS-compatible HuggingFace Dataset.
     """
     from datasets import Dataset
-    from app.rag.module import vectorstore
+    from app.rag.module import get_hybrid_store
 
+    store = get_hybrid_store()
     model = _get_gemini_model()
     all_roles = roles or ["finance", "hr", "engineering", "marketing", "c-level", "general"]
     rows = []
@@ -355,27 +367,25 @@ def generate_ragas_dataset(
     for role in all_roles:
         logger.info(f"[EvalDataset] Generating QA for role: {role}")
 
-        role_filter  = None if role == "c-level" else {"role": role}
-        search_kwargs: dict = {"k": docs_per_role * 2}
-        if role_filter:
-            search_kwargs["filter"] = role_filter
-
         try:
-            docs = vectorstore.similarity_search("overview summary", **search_kwargs)
+            docs = store.search(
+                "overview summary",
+                user_role=role,
+                limit=docs_per_role * 2,
+                rerank=False,
+            )
         except Exception as exc:
             logger.warning(f"[EvalDataset] Vectorstore search failed for role={role}: {exc}")
             docs = []
 
         if not docs:
-            # Fall back to built-in pairs for this role
+            # Fall back to built-in pairs for this role (preserve honest gaps on failures)
             for pair in [p for p in BUILTIN_QA_PAIRS if p["role"] == role][:docs_per_role]:
                 answer, contexts = _run_rag_for_role(pair["question"], role)
-                if not contexts:
-                    contexts = [pair["ground_truth"]]
                 rows.append({
                     "user_input":          pair["question"],
-                    "response":            answer or pair["ground_truth"],
-                    "retrieved_contexts":  contexts,
+                    "response":            answer or "",
+                    "retrieved_contexts":  contexts if contexts else [""],
                     "reference":           pair["ground_truth"],
                     "role":                role,
                     "source":              "builtin_fallback",
@@ -393,13 +403,10 @@ def generate_ragas_dataset(
             time.sleep(sleep_between_calls)
 
             answer, contexts = _run_rag_for_role(question, role)
-            if not contexts:
-                contexts = [doc.page_content]
-
             rows.append({
                 "user_input":          question,
-                "response":            answer or doc.page_content,
-                "retrieved_contexts":  contexts,
+                "response":            answer or "",
+                "retrieved_contexts":  contexts if contexts else [""],
                 "reference":           doc.page_content,
                 "role":                role,
                 "source":              doc.metadata.get("source", ""),
@@ -421,5 +428,5 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logger.info("Building builtin dataset…")
     ds = load_builtin_dataset_with_rag(sleep_between_calls=1.0)
-    print(ds)
-    print(ds[0])
+    logger.info("Dataset summary: %s", ds)
+    logger.info("First row: %s", ds[0])

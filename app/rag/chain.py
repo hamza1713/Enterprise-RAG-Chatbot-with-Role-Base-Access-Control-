@@ -1,10 +1,9 @@
 """
-app/rag/chain.py — High-level ask_rag() helper.
-
-Renamed from `app/rag_utils/rag_chain.py`.
+app/rag/chain.py — High-level async ask_rag() helper.
 """
 
-import asyncio
+from __future__ import annotations
+
 from .module import get_rag_chain
 
 _NOT_FOUND_SIGNAL = "could not find relevant information"
@@ -12,15 +11,14 @@ _NOT_FOUND_SIGNAL = "could not find relevant information"
 
 async def ask_rag(question: str, role: str, cohere_api_key: str | None = None) -> dict:
     """
-    Invoke the RAG chain and return the answer + source documents.
-    Access control (cross-department denial) is enforced BEFORE this
-    function is called, so no additional gating is needed here.
+    Invoke the RAG chain asynchronously and return the answer + source documents.
+    Access control (cross-department denial) is enforced BEFORE calling this helper.
     """
     try:
-        chain  = get_rag_chain(user_role=role, cohere_api_key=cohere_api_key)
-        result = await asyncio.to_thread(chain.invoke, {"input": question})
+        chain = get_rag_chain(user_role=role, cohere_api_key=cohere_api_key)
+        result = await chain.ainvoke({"input": question})
 
-        answer = result.get("answer", "").strip()
+        answer = (result.get("answer") or "").strip()
         if not answer:
             answer = (
                 "I could not find relevant information about this topic "
@@ -28,13 +26,11 @@ async def ask_rag(question: str, role: str, cohere_api_key: str | None = None) -
             )
 
         sources: list[str] = []
-        if "context" in result:
-            for doc in result["context"]:
-                src = doc.metadata.get("source")
-                if src and src not in sources:
-                    sources.append(src)
+        for doc in result.get("context") or []:
+            src = doc.metadata.get("source")
+            if src and src not in sources:
+                sources.append(src)
 
-        # Suppress misleading citations when the LLM signals no match
         if _NOT_FOUND_SIGNAL in answer.lower():
             sources = []
 

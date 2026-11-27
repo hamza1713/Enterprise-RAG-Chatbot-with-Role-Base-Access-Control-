@@ -1,207 +1,31 @@
 """
-app/core/database.py — SQLite & DuckDB setup helpers.
-
-Extracted from the old monolithic `app/main.py`.
-All schema creation and connection helpers live here so they are
-lazily invoked (not at import time) and testable in isolation.
-
-Fix (2026-06-28): Added `heal_stale_filepaths()` which is called on
-every startup to correct any DB records whose `filepath` column still
-points to a previous project directory (e.g. after renaming/moving
-the project folder).
+app/core/database.py — PostgreSQL seeding helpers and Parquet CSV serialization.
 """
 
-import sqlite3
+from __future__ import annotations
+
+import hashlib
+from io import BytesIO
 import logging
-import os
-import re
+import mimetypes
 from pathlib import Path
+import re
+import uuid
 
-import duckdb
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from sqlalchemy import func, select, text
 
-from .config import DB_PATH, DUCKDB_DIR, DUCKDB_PATH, RESOURCES_DIR, UPLOAD_DIR
+from app.authz.openfga import get_rebac_service
+from app.core.config import RESOURCES_DIR
+from app.core.users import _SYSTEM_ROLES, seed_default_users
+from app.db.models import DatasetTable, DocumentRecord, JobRecord, Role
+from app.db.session import sync_session
+from app.rag.semantic_layer import ensure_starter_semantic_model_sync
+from app.storage import get_storage_backend
 
 logger = logging.getLogger("FinSight.db")
-
-# ── Ensure directories exist ───────────────────────────────────────────────────
-DUCKDB_DIR.mkdir(parents=True, exist_ok=True)
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  SQLite helpers
-# ══════════════════════════════════════════════════════════════════════════════
-
-def get_db_conn() -> sqlite3.Connection:
-    """Return a WAL-mode SQLite connection to the main application DB."""
-    conn = sqlite3.connect(str(DB_PATH), timeout=20.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-
-def init_sqlite_schema() -> None:
-    """Create tables if they don't exist (idempotent)."""
-    conn = get_db_conn()
-    conn.cursor().executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT,
-            role     TEXT
-        );
-        CREATE TABLE IF NOT EXISTS roles (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            role_name TEXT UNIQUE
-        );
-        CREATE TABLE IF NOT EXISTS documents (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename         TEXT,
-            role             TEXT,
-            filepath         TEXT NOT NULL,
-            headers_str      TEXT,
-            embedded         INTEGER DEFAULT 0,
-            total_chunks     INTEGER DEFAULT 0,
-            embedded_chunks  INTEGER DEFAULT 0
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
-            chunk_id UNINDEXED,
-            doc_id UNINDEXED,
-            role UNINDEXED,
-            source UNINDEXED,
-            content,
-            tokenize = 'porter unicode61'
-        );
-    """)
-    conn.commit()
-
-    # Safely add columns that may not exist in older DB files
-    for col in ["total_chunks", "embedded_chunks"]:
-        try:
-            conn.execute(f"ALTER TABLE documents ADD COLUMN {col} INTEGER DEFAULT 0")
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # column already exists
-
-    conn.close()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Path-healing (self-correcting on project rename / move)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def heal_stale_filepaths() -> None:
-    """
-    Detect and fix any `filepath` values in the `documents` table that do NOT
-    point at the current project root (BASE_DIR).
-
-    Two cases handled:
-      1. Absolute paths from a previous project directory  e.g. Finsight_02 → Finsight_05
-      2. Relative paths (no drive letter)  e.g. 'static/uploads/…' → absolute
-
-    Safe to call on every startup — only updates rows that need fixing.
-    """
-    current_upload_root = str(UPLOAD_DIR.parent.parent)  # …/Finsight_05
-
-    conn = get_db_conn()
-    c    = conn.cursor()
-    rows = c.execute("SELECT id, filepath FROM documents").fetchall()
-
-    changed = 0
-    for row_id, fp in rows:
-        # ── Case 1: absolute path pointing somewhere OTHER than current root ──
-        if os.path.isabs(fp):
-            if not fp.startswith(current_upload_root):
-                # Derive the sub-path after 'static/uploads/…'
-                try:
-                    idx     = fp.lower().index("static")
-                    rel     = fp[idx:]          # e.g. 'static\\uploads\\General\\file.md'
-                    new_fp  = os.path.normpath(os.path.join(current_upload_root, rel))
-                    c.execute("UPDATE documents SET filepath=? WHERE id=?", (new_fp, row_id))
-                    logger.info(f"[HealPaths] Fixed absolute: {fp!r} → {new_fp!r}")
-                    changed += 1
-                except ValueError:
-                    logger.warning(f"[HealPaths] Cannot heal path (no 'static' segment): {fp!r}")
-
-        # ── Case 2: relative path ─────────────────────────────────────────────
-        else:
-            new_fp = os.path.normpath(os.path.join(current_upload_root, fp))
-            c.execute("UPDATE documents SET filepath=? WHERE id=?", (new_fp, row_id))
-            logger.info(f"[HealPaths] Fixed relative: {fp!r} → {new_fp!r}")
-            changed += 1
-
-    if changed:
-        conn.commit()
-        logger.info(f"[HealPaths] {changed} filepath(s) corrected.")
-    else:
-        logger.debug("[HealPaths] All filepaths are current — no changes needed.")
-
-    conn.close()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  DuckDB helpers
-# ══════════════════════════════════════════════════════════════════════════════
-
-def init_duckdb_schema() -> None:
-    """Create the DuckDB tables_metadata table if it doesn't exist."""
-    dc = duckdb.connect(str(DUCKDB_PATH))
-    dc.execute("""
-        CREATE TABLE IF NOT EXISTS tables_metadata (
-            table_name TEXT,
-            role       TEXT
-        )
-    """)
-    dc.close()
-
-
-def reconcile_duckdb_from_sqlite() -> None:
-    """
-    Ensure every CSV registered in SQLite has a matching DuckDB table.
-    Safe to call on every startup — skips files already present.
-    """
-    conn = get_db_conn()
-    rows = conn.execute(
-        "SELECT filename, role, filepath, headers_str FROM documents "
-        "WHERE headers_str IS NOT NULL"
-    ).fetchall()
-    conn.close()
-
-    if not rows:
-        return
-
-    try:
-        dc = duckdb.connect(str(DUCKDB_PATH))
-        registered = {r[0].lower() for r in dc.execute("SELECT table_name FROM tables_metadata").fetchall()}
-        physical   = {r[0].lower() for r in dc.execute("SHOW TABLES").fetchall()}
-    except Exception as exc:
-        logger.error(f"[RECONCILE] DuckDB open error: {exc}")
-        return
-
-    for filename, role, filepath, _headers_str in rows:
-        tname = re.sub(r"[^a-zA-Z0-9_]", "_", Path(filepath).stem)
-        if tname.lower() in registered and tname.lower() in physical:
-            continue
-        try:
-            df = pd.read_csv(filepath)
-            dc.execute("DELETE FROM tables_metadata WHERE table_name = ?", (tname,))
-            dc.register("_df_rec", df)
-            dc.execute(f"CREATE OR REPLACE TABLE {tname} AS SELECT * FROM _df_rec")
-            dc.execute(
-                "INSERT INTO tables_metadata (table_name, role) VALUES (?, ?)",
-                (tname, role),
-            )
-            dc.unregister("_df_rec")
-            logger.info(f"[RECONCILE] Loaded missing table '{tname}' (role={role})")
-        except Exception as exc:
-            logger.error(f"[RECONCILE] Failed for '{tname}': {exc}")
-
-    dc.close()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Default data seed
-# ══════════════════════════════════════════════════════════════════════════════
 
 _ROLE_MAPPING: dict[str, str] = {
     "engineering": "Engineering",
@@ -212,89 +36,197 @@ _ROLE_MAPPING: dict[str, str] = {
 }
 
 
-def preload_default_data() -> None:
+def sanitize_table_name(filename: str) -> str:
+    """Convert a CSV filename stem into a validated SQL identifier."""
+    return re.sub(r"[^a-zA-Z0-9_]", "_", Path(filename).stem)
+
+
+def csv_bytes_to_parquet_bytes(data: bytes) -> tuple[bytes, list[str], int]:
     """
-    Copy documents from resources/data/<dept>/ into static/uploads/<role>/,
-    register them in SQLite with ABSOLUTE filepaths, and load CSVs into DuckDB.
-    Runs in a background thread on startup — idempotent.
+    Parse CSV bytes via Pandas and serialize them as compressed Parquet bytes.
+    Returns (parquet_bytes, column_names, row_count).
+    """
+    df = pd.read_csv(BytesIO(data))
+    columns = [str(col) for col in df.columns.tolist()]
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    out = BytesIO()
+    pq.write_table(table, out, compression="snappy")
+    return out.getvalue(), columns, int(len(df))
+
+
+def init_postgres_seed() -> None:
+    """Verify PostgreSQL connectivity and idempotently seed roles/users."""
+    with sync_session() as db:
+        db.execute(text("SELECT 1"))
+    seed_default_users()
+
+
+def preload_default_data() -> list[tuple[str, int]]:
+    """
+    Upload sample documents from resources/data/<dept>/ to ObjectStorageBackend,
+    persist Parquet datasets for CSVs, register rows in PostgreSQL, and enqueue
+    durable indexing jobs for unindexed files.
+
+    Returns list of (job_id, doc_id) created for newly registered documents.
     """
     if not RESOURCES_DIR.exists():
-        reconcile_duckdb_from_sqlite()
-        return
+        return []
 
-    conn = get_db_conn()
-    c    = conn.cursor()
+    storage = get_storage_backend()
+    storage.ensure_bucket()
+    created_jobs: list[tuple[str, int]] = []
 
-    # Ensure all known roles exist
-    for role_name in _ROLE_MAPPING.values():
-        c.execute("INSERT OR IGNORE INTO roles (role_name) VALUES (?)", (role_name,))
-    conn.commit()
+    with sync_session() as db:
+        db.execute(text("SELECT pg_advisory_xact_lock(724902)"))
 
-    import shutil
+        for role_name in _ROLE_MAPPING.values():
+            existing_role = db.scalar(
+                select(Role).where(func.lower(Role.role_name) == role_name.lower())
+            )
+            if existing_role is None:
+                db.add(
+                    Role(
+                        role_name=role_name,
+                        is_system=role_name.lower() in _SYSTEM_ROLES,
+                    )
+                )
+        db.flush()
 
-    for sub in RESOURCES_DIR.iterdir():
-        if not sub.is_dir():
-            continue
-        role = _ROLE_MAPPING.get(sub.name.lower(), sub.name.capitalize())
-
-        for filepath in sub.iterdir():
-            if not filepath.is_file():
+        for sub in RESOURCES_DIR.iterdir():
+            if not sub.is_dir():
                 continue
+            role = _ROLE_MAPPING.get(sub.name.lower(), sub.name.capitalize())
 
-            filename  = filepath.name
-            extension = filepath.suffix.lower()
+            for filepath in sorted(sub.iterdir()):
+                if not filepath.is_file():
+                    continue
+                filename = filepath.name
+                extension = filepath.suffix.lower()
+                if extension not in {".csv", ".md", ".pdf"}:
+                    continue
 
-            c.execute(
-                "SELECT id FROM documents WHERE filename=? AND role=?",
-                (filename, role),
-            )
-            if c.fetchone():
-                continue  # already registered
+                existing_doc = db.scalar(
+                    select(DocumentRecord).where(
+                        func.lower(DocumentRecord.filename) == filename.lower(),
+                        func.lower(DocumentRecord.role) == role.lower(),
+                    )
+                )
+                if existing_doc is not None:
+                    continue
 
-            dest_dir  = UPLOAD_DIR / role
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            dest_path = dest_dir / filename
-            shutil.copy2(filepath, dest_path)
+                raw_bytes = filepath.read_bytes()
+                if not raw_bytes:
+                    continue
 
-            # Always store the resolved absolute path
-            dest_abs  = str(dest_path.resolve())
+                sha256 = hashlib.sha256(raw_bytes).hexdigest()
+                content_type = mimetypes.guess_type(filename)[0] or (
+                    "text/csv"
+                    if extension == ".csv"
+                    else "text/markdown"
+                    if extension == ".md"
+                    else "application/pdf"
+                )
+                object_key = storage.put_bytes(
+                    f"documents/{role}/{uuid.uuid4().hex}_{filename}",
+                    raw_bytes,
+                    content_type=content_type,
+                )
 
-            headers_str: str | None = None
-            if extension == ".csv":
-                try:
-                    df     = pd.read_csv(dest_path)
-                    tname  = re.sub(r"[^a-zA-Z0-9_]", "_", dest_path.stem)
-                    headers_str = ",".join(str(h) for h in df.columns.tolist())
-                    dc = duckdb.connect(str(DUCKDB_PATH))
+                headers_str: str | None = None
+                parquet_info: tuple[str, bytes, list[str], int] | None = None
+
+                if extension == ".csv":
                     try:
-                        dc.execute("DELETE FROM tables_metadata WHERE table_name=?", (tname,))
-                        dc.register("df_tmp", df)
-                        dc.execute(f"CREATE OR REPLACE TABLE {tname} AS SELECT * FROM df_tmp")
-                        dc.execute(
-                            "INSERT INTO tables_metadata (table_name, role) VALUES (?,?)",
-                            (tname, role),
+                        tname = re.sub(r"[^a-zA-Z0-9_]", "_", filepath.stem)
+                        parquet_bytes, cols, row_count = csv_bytes_to_parquet_bytes(raw_bytes)
+                        headers_str = ",".join(cols)
+                        parquet_info = (tname, parquet_bytes, cols, row_count)
+                    except Exception as exc:
+                        logger.error(f"[PRELOAD] CSV parse failed for {filename}: {exc}")
+
+                doc = DocumentRecord(
+                    filename=filename,
+                    role=role,
+                    object_key=object_key,
+                    legacy_filepath=None,
+                    content_type=content_type,
+                    size_bytes=len(raw_bytes),
+                    sha256=sha256,
+                    headers_str=headers_str,
+                    embedded=0,
+                    total_chunks=0,
+                    embedded_chunks=0,
+                )
+                db.add(doc)
+                db.flush()
+                rebac = get_rebac_service()
+                rebac.sync_document_tuples(
+                    db,
+                    doc.id,
+                    role,
+                    owner_username="admin",
+                    created_by="preload",
+                )
+
+                if parquet_info is not None:
+                    tname, parquet_bytes, cols, row_count = parquet_info
+                    existing_table = db.scalar(
+                        select(DatasetTable).where(
+                            func.lower(DatasetTable.table_name) == tname.lower()
                         )
-                        dc.unregister("df_tmp")
-                    finally:
-                        dc.close()
-                except Exception as exc:
-                    logger.error(f"[PRELOAD] DuckDB error for {filename}: {exc}")
+                    )
+                    if existing_table is None:
+                        parquet_key = storage.put_bytes(
+                            f"datasets/{role}/{doc.id}/{tname}.parquet",
+                            parquet_bytes,
+                            content_type="application/vnd.apache.parquet",
+                        )
+                        db.add(
+                            DatasetTable(
+                                doc_id=doc.id,
+                                table_name=tname,
+                                role=role,
+                                parquet_key=parquet_key,
+                                columns_json=cols,
+                                row_count=row_count,
+                            )
+                        )
+                        rebac.sync_dataset_tuples(
+                            db,
+                            doc.id,
+                            tname,
+                            owner_username="admin",
+                            created_by="preload",
+                        )
+                        ensure_starter_semantic_model_sync(
+                            db,
+                            table_name=tname,
+                            doc_id=doc.id,
+                            columns=cols,
+                            parquet_bytes=parquet_bytes,
+                            updated_by="preload",
+                        )
+                    else:
+                        logger.warning(
+                            f"[PRELOAD] Skipping DatasetTable '{tname}': name already exists."
+                        )
 
-            c.execute(
-                "INSERT INTO documents (filename, role, filepath, headers_str, embedded) "
-                "VALUES (?,?,?,?,0)",
-                (filename, role, dest_abs, headers_str),
-            )
-            conn.commit()
-            logger.info(f"[PRELOAD] Registered {filename} ({role}) at {dest_abs}")
+                job = JobRecord(
+                    id=str(uuid.uuid4()),
+                    job_type="index_doc",
+                    idempotency_key=f"index_doc:{doc.id}",
+                    target_doc_id=doc.id,
+                    requested_by="system",
+                    status="queued",
+                    payload={"doc_id": doc.id, "filename": filename, "role": role},
+                )
+                db.add(job)
+                db.flush()
+                created_jobs.append((job.id, doc.id))
+                logger.info(
+                    f"[PRELOAD] Registered '{filename}' ({role}) at object_key='{object_key}'"
+                )
 
-    conn.close()
-    reconcile_duckdb_from_sqlite()
+        db.commit()
 
-    # Trigger RAG indexer after seeding
-    try:
-        from app.rag.module import run_indexer
-        run_indexer()
-        logger.info("[PRELOAD] Indexer triggered.")
-    except Exception as exc:
-        logger.warning(f"[PRELOAD] Indexer warning: {exc}")
+    return created_jobs
