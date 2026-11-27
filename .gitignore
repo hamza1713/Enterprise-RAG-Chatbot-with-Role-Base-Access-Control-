@@ -86,5 +86,11 @@ frontend/.env.local
 Thumbs.db
 desktop.ini
 
-# Agent / Tool cache
+# Agent / Tool cache & generated workspace artifacts
 .agents/
+scratch/
+videos/
+app/rag_evaluator/ragas_report.html
+app/rag_evaluator/evaluation_results_*.csv
+app/rag_evaluator/last_eval_status.json
+app/rag_evaluator/rbac_security_report.json

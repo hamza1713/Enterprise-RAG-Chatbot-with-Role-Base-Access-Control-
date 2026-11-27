@@ -1,34 +1,242 @@
-# Single-host deployment candidate. Put an HTTPS gateway in front of port 8080.
+# Production Compose deployment candidate. Put an HTTPS gateway in front of port 8080.
 services:
+  postgres:
+    image: timescale/timescaledb-ha:pg17.12-ts2.32.1
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-finsight}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong PostgreSQL password}
+      POSTGRES_DB: ${POSTGRES_DB:-finsight}
+    volumes:
+      - pg-data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finsight} -d ${POSTGRES_DB:-finsight}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.12-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # S3-compatible object storage (RustFS replaces MinIO, whose images were withdrawn).
+  # The app creates the bucket on startup. Point S3_ENDPOINT_URL at AWS S3 or another
+  # S3-compatible service instead to drop this container.
+  rustfs:
+    image: rustfs/rustfs:1.0.1
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3 access key}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?Set S3 secret key}
+      RUSTFS_CONSOLE_ENABLE: "false"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  docling-serve:
+    image: quay.io/docling-project/docling-serve-cpu:v1.39.0
+    environment:
+      DOCLING_NUM_THREADS: ${DOCLING_NUM_THREADS:-4}
+      DOCLING_SERVE_ENABLE_UI: "false"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    restart: unless-stopped
+
+  openfga-db-init:
+    image: postgres:17.12-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set a strong PostgreSQL password}
+      POSTGRES_USER: ${POSTGRES_USER:-finsight}
+    command:
+      - /bin/sh
+      - -c
+      - >
+        psql -h postgres -U "$$POSTGRES_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'openfga'" | grep -q 1 ||
+        psql -h postgres -U "$$POSTGRES_USER" -d postgres -c "CREATE DATABASE openfga"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  openfga-migrate:
+    image: openfga/openfga:v1.23.0
+    command:
+      [
+        "migrate",
+        "--datastore-engine",
+        "postgres",
+        "--datastore-uri",
+        "postgres://${POSTGRES_USER:-finsight}:${POSTGRES_PASSWORD}@postgres:5432/openfga?sslmode=disable",
+      ]
+    depends_on:
+      openfga-db-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  openfga:
+    image: openfga/openfga:v1.23.0
+    command: ["run"]
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://${POSTGRES_USER:-finsight}:${POSTGRES_PASSWORD}@postgres:5432/openfga?sslmode=disable
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+      OPENFGA_AUTHN_METHOD: ${OPENFGA_AUTHN_METHOD:-preshared}
+      OPENFGA_AUTHN_PRESHARED_KEYS: ${OPENFGA_API_TOKEN:?Set a shared OpenFGA API token in production}
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    user: "10001:10001"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-finsight}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finsight}}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    command: ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}"]
     user: "10001:10001"
     environment:
       APP_ENV: production
       PRELOAD_SAMPLE_DATA: "false"
       JWT_SECRET: ${JWT_SECRET:?Set a stable signing secret of at least 32 characters}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      FRONTEND_URL: ${FRONTEND_URL:-${CORS_ORIGINS}}
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-Enterprise SSO}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
+      OIDC_ROLE_CLAIM: ${OIDC_ROLE_CLAIM:-groups}
+      OIDC_ROLE_MAP_JSON: ${OIDC_ROLE_MAP_JSON:-{}}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set an initial admin password of at least 14 characters}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:?Set your Google API key}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
       CORS_ORIGINS: ${CORS_ORIGINS:?Set the public HTTPS origin}
-      DB_NAME: /app/static/data/roles_docs.db
-      CHROMA_DIR: /app/chroma_db
-      EVAL_OUTPUT_DIR: /app/static/evaluation
-    volumes:
-      - app-data:/app/static
-      - vector-data:/app/chroma_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-finsight}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finsight}}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://rustfs:9000}
+      S3_BUCKET: ${S3_BUCKET:-finsight-documents}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3 access key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3 secret key}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      DOCLING_SERVE_URL: ${DOCLING_SERVE_URL:-http://docling-serve:5001}
+      DOCLING_TIMEOUT_SECONDS: ${DOCLING_TIMEOUT_SECONDS:-120}
+      OPENFGA_API_URL: ${OPENFGA_API_URL:-http://openfga:8080}
+      OPENFGA_STORE_NAME: ${OPENFGA_STORE_NAME:-finsight}
+      OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:?Set a shared OpenFGA API token in production}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      CONTEXTUAL_RETRIEVAL_ENABLED: ${CONTEXTUAL_RETRIEVAL_ENABLED:-true}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-127.0.0.1/32,::1/128,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.8-flash}
+      GEMINI_LIGHT_MODEL: ${GEMINI_LIGHT_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
+      COHERE_RERANK_MODEL: ${COHERE_RERANK_MODEL:-rerank-v3.5}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finsight-api}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+      AUDIT_STORE_PROMPT_PREVIEW: ${AUDIT_STORE_PROMPT_PREVIEW:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      openfga:
+        condition: service_started
     expose:
       - "8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=5)"]
       interval: 30s
       timeout: 8s
       retries: 3
       start_period: 60s
     restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["taskiq", "worker", "app.workers.broker:broker", "--workers", "2"]
+    user: "10001:10001"
+    environment:
+      APP_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?Set a stable signing secret of at least 32 characters}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?Set your Google API key}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set the public HTTPS origin}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-finsight}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finsight}}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://rustfs:9000}
+      S3_BUCKET: ${S3_BUCKET:-finsight-documents}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3 access key}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3 secret key}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      DOCLING_SERVE_URL: ${DOCLING_SERVE_URL:-http://docling-serve:5001}
+      DOCLING_TIMEOUT_SECONDS: ${DOCLING_TIMEOUT_SECONDS:-120}
+      OPENFGA_API_URL: ${OPENFGA_API_URL:-http://openfga:8080}
+      OPENFGA_STORE_NAME: ${OPENFGA_STORE_NAME:-finsight}
+      OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:?Set a shared OpenFGA API token in production}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      CONTEXTUAL_RETRIEVAL_ENABLED: ${CONTEXTUAL_RETRIEVAL_ENABLED:-true}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.8-flash}
+      GEMINI_LIGHT_MODEL: ${GEMINI_LIGHT_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
+      COHERE_RERANK_MODEL: ${COHERE_RERANK_MODEL:-rerank-v3.5}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finsight-api}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+      AUDIT_STORE_PROMPT_PREVIEW: ${AUDIT_STORE_PROMPT_PREVIEW:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      openfga:
+        condition: service_started
+    restart: unless-stopped
+
   frontend:
     build:
       context: .
@@ -39,6 +247,8 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
 volumes:
-  app-data:
-  vector-data:
+  pg-data:
+  redis-data:
+  rustfs-data:
