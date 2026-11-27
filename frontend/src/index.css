@@ -1,46 +1,43 @@
 /* ==========================================================================
-   FinSight Dark Design System - Custom CSS Variables & Styling
+   FinSight Dark Design System — Base Tokens, Reset & Reusable Primitives
    ========================================================================== */
 
-   :root {
-    /* Indigo Nebula Theme Palette */
-    --primary: #509f81;
-    --primary-hover: #9bd8bd;
-    --secondary: #8B5CF6;
-    --secondary-hover: #A78BFA;
-    --accent-rgb: 94,157,128;
-    
-    --bg-gradient: linear-gradient(160deg, #050714 0%, #0d1130 55%, #060814 100%);
-    --surface: rgba(14, 17, 42, 0.85);
-    --surface-2: rgba(22, 27, 65, 0.45);
-    --surface-hover: rgba(30, 36, 85, 0.55);
-    
-    --border: rgba(94,157,128, 0.18);
-    --border-hover: rgba(94,157,128, 0.4);
-    
-    --text-primary: #F8FAFC;
-    --text-secondary: #CBD5E1;
-    --text-muted: #64748B;
-    
-    /* Role Specific Palette */
-    --role-clevel: #F59E0B;
-    --role-hr: #10B981;
-    --role-finance: #3B82F6;
-    --role-engineering: #A78BFA;
-    --role-marketing: #EC4899;
-    --role-general: #64748B;
-    
-    /* Transitions & Radii */
-    --radius-lg: 16px;
-    --radius-md: 12px;
-    --radius-sm: 8px;
-    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    
-    /* Font Declarations */
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-heading: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  }
+:root {
+  color-scheme: dark;
+  --primary: #167d68;
+  --primary-hover: #7edbc2;
+  --secondary: #167d68;
+  --secondary-hover: #98e5cf;
+  --accent-rgb: 126, 219, 194;
+
+  --bg-gradient: #101719;
+  --surface: #161f22;
+  --surface-2: #1c282b;
+  --surface-hover: #233237;
+
+  --border: #2a373b;
+  --border-hover: #49605e;
+
+  --text-primary: #f1f5f4;
+  --text-secondary: #becac8;
+  --text-muted: #94a7a3;
+
+  --role-clevel: #F59E0B;
+  --role-hr: #10B981;
+  --role-finance: #3B82F6;
+  --role-engineering: #A78BFA;
+  --role-marketing: #EC4899;
+  --role-general: #64748B;
+
+  --radius-lg: 14px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --transition-smooth: background-color .18s ease, border-color .18s ease, color .18s ease;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-heading: 'Inter', 'Plus Jakarta Sans', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+}
   
   /* Reset & Base Rules */
   * {
@@ -301,103 +298,12 @@
   .badge-role-marketing { border: 1px solid var(--role-marketing); color: var(--role-marketing); background: rgba(236, 72, 153, 0.08); }
   .badge-role-general { border: 1px solid var(--role-general); color: var(--role-general); background: rgba(148,167,163, 0.08); }
   
-  /* System Online Indicator */
-  .fs-online-indicator {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 11.5px;
-    color: var(--text-muted);
-  }
-  
-  .fs-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 99px;
-  }
-  
-  .fs-dot-online {
-    background: #10B981;
-    box-shadow: 0 0 10px #10B981;
-    animation: pulse 2s infinite;
-  }
-  
-  .fs-dot-offline {
-    background: #EF4444;
-    box-shadow: 0 0 10px #EF4444;
-  }
-  
-  /* Animations */
-  @keyframes pulse {
-    0% { transform: scale(0.9); opacity: 0.8; }
-    50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 14px #10B981; }
-    100% { transform: scale(0.9); opacity: 0.8; }
-  }
-  
+  /* Animations & Markdown Message Prose */
   @keyframes pulse-thinking {
     0%, 100% { opacity: 0.3; transform: scale(0.85); }
     50% { opacity: 1; transform: scale(1.1); }
   }
-  
-  /* Chat Messages Styles */
-  .chat-messages-container {
-    flex: 1;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    padding: 10px 4px 30px;
-  }
-  
-  .chat-bubble {
-    display: flex;
-    gap: 16px;
-    padding: 20px;
-    border-radius: var(--radius-md);
-    border: 1px solid transparent;
-    transition: var(--transition-smooth);
-  }
-  
-  .chat-bubble-user {
-    background: rgba(94,157,128, 0.08);
-    border-color: rgba(94,157,128, 0.2);
-    align-self: flex-end;
-    flex-direction: row-reverse;
-    max-width: 85%;
-  }
-  
-  .chat-bubble-assistant {
-    background: var(--surface);
-    border-color: var(--border);
-    align-self: flex-start;
-    width: 100%;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-  }
-  
-  .chat-avatar {
-    width: 40px;
-    height: 40px;
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    font-weight: bold;
-    flex-shrink: 0;
-  }
-  
-  .chat-avatar-user {
-    background: linear-gradient(135deg, rgba(94,157,128, 0.2), rgba(94,157,128, 0.1));
-    border: 1px solid var(--border);
-    color: var(--primary-hover);
-  }
-  
-  .chat-avatar-assistant {
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
-    color: #ffffff;
-    box-shadow: 0 4px 12px rgba(94,157,128, 0.35);
-  }
-  
+
   .chat-message-content {
     flex: 1;
     font-size: 14.5px;
@@ -482,76 +388,6 @@
   .chat-thinking span:nth-child(2) { animation: pulse-thinking 1.4s infinite 0.3s; }
   .chat-thinking span:nth-child(3) { animation: pulse-thinking 1.4s infinite 0.5s; }
   
-  /* Source Expanders in Chat */
-  .source-expanders-list {
-    margin-top: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  
-  .source-expander-item {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-    background: rgba(22,34,37, 0.4);
-  }
-  
-  .source-expander-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 14px;
-    cursor: pointer;
-    font-size: 12.5px;
-    font-weight: 600;
-    transition: var(--transition-smooth);
-    -webkit-user-select: none;
-    user-select: none;
-  }
-  
-  .source-expander-header:hover {
-    background: rgba(94,157,128, 0.08);
-  }
-  
-  .source-expander-content {
-    border-top: 1px solid var(--border);
-    padding: 16px;
-    background: rgba(13,23,25, 0.5);
-  }
-  
-  /* Metric Card Small for Sidebar */
-  .fs-metric-card-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-bottom: 16px;
-  }
-  
-  .fs-metric-card-small {
-    background: rgba(13,23,25, 0.45);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: var(--radius-sm);
-    padding: 8px 10px;
-    display: flex;
-    flex-direction: column;
-  }
-  
-  .fs-metric-label-small {
-    font-size: 10.5px;
-    color: var(--text-muted);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  
-  .fs-metric-value-small {
-    font-family: var(--font-heading);
-    font-size: 18px;
-    font-weight: 800;
-    margin-top: 2px;
-  }
-  
   /* Progress Bars for Indexing */
   .progress-bar-track {
     width: 100%;
@@ -631,31 +467,7 @@
     line-height: 1.6;
     margin-bottom: 20px;
   }
-  
-  .suggestion-pills {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 8px;
-  }
-  
-  .suggestion-pill {
-    padding: 8px 14px;
-    background: rgba(94,157,128, 0.08);
-    border: 1px solid var(--border);
-    border-radius: 99px;
-    font-size: 12.5px;
-    cursor: pointer;
-    transition: var(--transition-smooth);
-    color: var(--text-secondary);
-  }
-  
-  .suggestion-pill:hover {
-    background: rgba(94,157,128, 0.16);
-    border-color: var(--primary-hover);
-    color: #ffffff;
-  }
-  
+
   /* Glassy Modal / Overlay */
   .fs-overlay {
     position: fixed;
@@ -1057,46 +869,6 @@
     background: rgba(245,158,11,0.1);
     color: #FBBF24;
     border: 1px solid rgba(245,158,11,0.25);
-  }
-
-  /* ── SQL section ──────────────────────────────────────────────── */
-
-  .chat-sql-section {
-    margin-top: 10px;
-  }
-
-  .chat-sql-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    background: rgba(94,157,128,0.07);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-secondary);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: var(--transition-smooth);
-  }
-
-  .chat-sql-toggle:hover {
-    background: rgba(94,157,128,0.14);
-    border-color: var(--border-hover);
-    color: #fff;
-  }
-
-  .chat-sql-pre {
-    margin-top: 8px;
-    background: rgba(12,21,23, 0.9);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px 16px;
-    overflow-x: auto;
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    color: #A5B4FC;
-    line-height: 1.6;
   }
 
   /* ── Sources section ──────────────────────────────────────────── */

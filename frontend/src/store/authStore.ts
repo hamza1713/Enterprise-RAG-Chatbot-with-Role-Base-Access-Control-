@@ -1,57 +1,110 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import axios from 'axios';
-import { API_URL } from '../api/client';
+import client from '../api/client';
+import type { AuthProvidersResponse } from '../types';
 
 interface AuthState {
   username: string | null;
   role: string | null;
-  token: string | null;
+  authProvider: string | null;
   isAuthenticated: boolean;
+  authReady: boolean;
+  providers: AuthProvidersResponse | null;
+  hydrateSession: () => Promise<void>;
+  fetchProviders: () => Promise<AuthProvidersResponse>;
   login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
+  clearLocalSession: () => void;
 }
 
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
+export const useAuthStore = create<AuthState>()((set) => ({
+  username: null,
+  role: null,
+  authProvider: null,
+  isAuthenticated: false,
+  authReady: false,
+  providers: null,
+
+  hydrateSession: async () => {
+    try {
+      const res = await client.get<{ username: string; role: string; auth_provider?: string }>(
+        '/auth/me',
+        { timeout: 10000 }
+      );
+      set({
+        username: res.data.username,
+        role: res.data.role || 'General',
+        authProvider: res.data.auth_provider || 'local',
+        isAuthenticated: true,
+        authReady: true,
+      });
+    } catch {
+      set({
+        username: null,
+        role: null,
+        authProvider: null,
+        isAuthenticated: false,
+        authReady: true,
+      });
+    }
+  },
+
+  fetchProviders: async () => {
+    try {
+      const res = await client.get<AuthProvidersResponse>('/auth/providers', { timeout: 8000 });
+      set({ providers: res.data });
+      return res.data;
+    } catch {
+      const fallback: AuthProvidersResponse = {
+        local_enabled: true,
+        oidc_enabled: false,
+        provider_name: 'Enterprise SSO',
+      };
+      set({ providers: fallback });
+      return fallback;
+    }
+  },
+
+  login: async (username, password) => {
+    const response = await client.post<{
+      user: { username: string; role: string; auth_provider?: string };
+      role: string;
+    }>(
+      '/auth/login',
+      { username: username.trim(), password },
+      { timeout: 15000 }
+    );
+    const u = response.data.user;
+    set({
+      username: u?.username || username.trim(),
+      role: u?.role || response.data.role || 'General',
+      authProvider: u?.auth_provider || 'local',
+      isAuthenticated: true,
+      authReady: true,
+    });
+  },
+
+  logout: async () => {
+    try {
+      await client.post('/auth/logout');
+    } catch {
+      // Cookie clearing on client store continues regardless
+    }
+    set({
       username: null,
       role: null,
-      token: null,
+      authProvider: null,
       isAuthenticated: false,
+      authReady: true,
+    });
+  },
 
-      login: async (username, password) => {
-        // Prepare Basic Auth credentials
-        const authHeader = 'Basic ' + window.btoa(unescape(encodeURIComponent(`${username.trim()}:${password}`)));
-        
-        const response = await axios.get(`${API_URL}/login`, {
-          timeout: 15000,
-          headers: {
-            Authorization: authHeader,
-          },
-        });
-
-        const data = response.data;
-        set({
-          username: username.trim(),
-          role: data.role || 'General',
-          token: data.access_token,
-          isAuthenticated: true,
-        });
-      },
-
-      logout: () => {
-        set({
-          username: null,
-          role: null,
-          token: null,
-          isAuthenticated: false,
-        });
-      },
-    }),
-    {
-      name: 'finsight_auth',
-      storage: createJSONStorage(() => sessionStorage),
-    }
-  )
-);
+  clearLocalSession: () => {
+    set({
+      username: null,
+      role: null,
+      authProvider: null,
+      isAuthenticated: false,
+      authReady: true,
+    });
+  },
+}));

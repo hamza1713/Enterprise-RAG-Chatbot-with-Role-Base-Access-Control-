@@ -1,41 +1,69 @@
 import { API_URL } from './client';
 import { readNdjson } from './ndjson';
+import type { AgentStep, ChartSpec, CitationItem } from '../types';
 
 export interface ChatChunk {
-  type: 'init' | 'fallback' | 'token' | 'metadata' | 'error';
+  type: 'init' | 'step' | 'fallback' | 'token' | 'chart' | 'citation' | 'metadata' | 'error';
   user?: string;
   role?: string;
   mode?: string;
+  thread_id?: string;
+  node?: string;
+  label?: string;
+  status?: 'running' | 'done' | 'error';
+  detail?: string;
   content?: string;
+  message?: string;
   sql?: string | null;
+  sql_retries?: number;
   sources?: string[];
+  citations?: CitationItem[];
+  chart_spec?: ChartSpec | null;
+  agent_steps?: AgentStep[];
+  guardrail_warnings?: string[];
   fallback?: boolean;
+  cached?: boolean;
   answer?: string;
 }
 
+export const ALLOWED_CHAT_CHUNK_TYPES = new Set([
+  'init',
+  'step',
+  'fallback',
+  'token',
+  'chart',
+  'citation',
+  'metadata',
+  'error',
+]);
+
 export async function streamChat(
   question: string,
-  token: string,
   onChunk: (chunk: ChatChunk) => void,
   onComplete: () => void,
   onError: (err: Error) => void,
   signal?: AbortSignal,
-  history?: { role: string; content: string }[]
+  history?: { role: string; content: string }[],
+  threadId?: string | null
 ): Promise<void> {
   try {
     const response = await fetch(`${API_URL}/chat-stream`, {
       method: 'POST',
+      credentials: 'include',
       signal,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
       },
-      body: JSON.stringify({ question, history: history || [] }),
+      body: JSON.stringify({
+        question,
+        history: history || [],
+        thread_id: threadId || undefined,
+      }),
     });
 
     if (!response.ok) {
       if (response.status === 401) {
-        sessionStorage.removeItem('finsight_auth');
+        window.dispatchEvent(new CustomEvent('finsight:unauthorized'));
         window.location.assign('/login');
         return;
       }
@@ -49,13 +77,17 @@ export async function streamChat(
 
     let receivedTerminalRecord = false;
     for await (const chunk of readNdjson<ChatChunk>(response.body)) {
-      if (!chunk || !['init', 'fallback', 'token', 'metadata', 'error'].includes(chunk.type)) {
+      if (!chunk || !ALLOWED_CHAT_CHUNK_TYPES.has(chunk.type)) {
         throw new Error('The server returned an invalid response. Please try again.');
       }
-      if (chunk.type === 'metadata' || chunk.type === 'error') receivedTerminalRecord = true;
+      if (chunk.type === 'metadata' || chunk.type === 'error') {
+        receivedTerminalRecord = true;
+      }
       onChunk(chunk);
     }
-    if (!receivedTerminalRecord) throw new Error('The response was interrupted before completion. Please try again.');
+    if (!receivedTerminalRecord) {
+      throw new Error('The response was interrupted before completion. Please try again.');
+    }
 
     onComplete();
   } catch (err: unknown) {
