@@ -83,13 +83,18 @@ async def trigger_evaluation(
         mode=request.mode,
         status="queued",
     )
-    db.add(job)
-    db.add(run)
 
     try:
+        # Flush the parent job first: there is no relationship() between the models,
+        # so a single flush could insert evaluation_runs before jobs and break its FK.
+        db.add(job)
+        await db.flush()
+        db.add(run)
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
+        if getattr(exc.orig, "sqlstate", None) != "23505":
+            raise
         raise HTTPException(
             status_code=409,
             detail="An evaluation is already running or queued. Check /evaluate/status.",

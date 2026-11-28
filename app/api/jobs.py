@@ -167,8 +167,6 @@ async def retry_job(
         progress_message=f"Retried from job {job.id[:8]}…",
         payload=job.payload,
     )
-    db.add(new_job)
-
     eval_run: EvaluationRun | None = None
     if job.job_type == "evaluation":
         payload = job.payload or {}
@@ -178,12 +176,18 @@ async def retry_job(
             mode=str(payload.get("mode", "full")),
             status="queued",
         )
-        db.add(eval_run)
 
     try:
+        # Flush the parent job before its evaluation run (FK evaluation_runs.job_id -> jobs.id).
+        db.add(new_job)
+        await db.flush()
+        if eval_run is not None:
+            db.add(eval_run)
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
+        if getattr(exc.orig, "sqlstate", None) != "23505":
+            raise
         raise HTTPException(
             status_code=409,
             detail="An active job with the same key is already queued or running.",
