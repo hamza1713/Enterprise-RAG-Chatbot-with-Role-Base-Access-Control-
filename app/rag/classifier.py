@@ -8,10 +8,13 @@ conversational/greeting message that should be handled directly.
 Renamed from `app/rag_utils/query_classifier.py`.
 """
 
-from google import genai
-from app.core.config import google_api_key, generate_content_with_fallback
+import re
 
-_client = genai.Client(api_key=google_api_key or "DUMMY_KEY")
+from app.core.config import (
+    GEMINI_LIGHT_MODEL,
+    generate_content_with_fallback,
+    get_genai_client,
+)
 
 # ── Conversational intent patterns ────────────────────────────────────────────
 
@@ -41,22 +44,31 @@ _GREETING_PATTERNS = {
 }
 
 
+_CONVERSATIONAL_OPENER_RE = re.compile(
+    r"^(?:"
+    r"(?:hi|hello|hey|howdy|greetings|hiya|yo|good morning|good afternoon|good evening)"
+    r"(?:[,!\s]+(?:there|everyone|folks|all|team|finsight|bot|ai))*"
+    r"(?:[,!.\s]+(?:how are you|how's it going|what's up|whats up|nice to meet you))?"
+    r"|(?:thanks|thank you)(?:\s+(?:so much|very much|a lot))?(?:[,!\s]+(?:everyone|team|finsight))?"
+    r")$"
+)
+
+
 def is_conversational_query(question: str) -> bool:
     """
     Return True if the question is a greeting, farewell, thank-you,
     or other conversational small-talk that should NOT go through RAG/SQL.
 
-    Uses lightweight keyword matching — no LLM call needed.
+    Uses strict exact + greeting-opener matching so domain queries such as
+    'history of 2024', 'types of...', 'okr...', or 'help me list...' are never swallowed.
     """
-    q = question.strip().lower().rstrip("!?.,;")
-    # Exact match
+    q = re.sub(r"\s+", " ", question.strip().lower()).rstrip("!?.,; ")
+    if not q:
+        return False
     if q in _GREETING_PATTERNS:
         return True
-    # Starts-with match for short messages (≤ 8 words)
-    if len(q.split()) <= 8:
-        for pattern in _GREETING_PATTERNS:
-            if q.startswith(pattern):
-                return True
+    if len(q.split()) <= 8 and _CONVERSATIONAL_OPENER_RE.match(q):
+        return True
     return False
 
 
@@ -98,6 +110,10 @@ Here is the question:
 
 Answer:
     """
-    result     = generate_content_with_fallback(_client, prompt)
+    result = generate_content_with_fallback(
+        get_genai_client(),
+        prompt,
+        preferred_model=GEMINI_LIGHT_MODEL,
+    )
     classified = result.strip().upper()
     return "SQL" if "SQL" in classified else "RAG"

@@ -71,38 +71,69 @@ REFERENCE_REQUIRED_METRICS = {"context_precision", "context_recall", "answer_cor
 
 def _build_ragas_llm():
     """
-    Wrap the project's Gemini model with LangchainLLMWrapper so RAGAS
-    can use it as the evaluator LLM — no OpenAI key required.
+    Wrap the project's Gemini model cleanly for `ragas.evaluate` (`ragas>=0.4.4`).
     """
-    from app.core.config import google_api_key
+    import os
+    from app.core.config import GEMINI_CHAT_MODEL, google_api_key
     from langchain_google_genai import ChatGoogleGenerativeAI
     from ragas.llms import LangchainLLMWrapper
 
+    key = (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or google_api_key or "").strip()
+    if not key:
+        raise RuntimeError("GOOGLE_API_KEY is required to run RAGAS LLM evaluation.")
+
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model=GEMINI_CHAT_MODEL,
         temperature=0.1,   # Low temp for consistent evaluation judgements
-        google_api_key=google_api_key or "DUMMY_KEY",
+        google_api_key=key,
         transport="rest",
         max_retries=1,
     )
     return LangchainLLMWrapper(llm)
 
 
+def build_native_ragas_llm():
+    """Build native `ragas.llms.llm_factory` Gemini evaluator backed by `google-genai`."""
+    from app.core.config import GEMINI_CHAT_MODEL, get_genai_client
+    from ragas.llms import llm_factory
+
+    return llm_factory(
+        GEMINI_CHAT_MODEL,
+        provider="google",
+        client=get_genai_client(),
+    )
+
+
 def _build_ragas_embeddings():
     """
-    Wrap Google embeddings with LangchainEmbeddingsWrapper for RAGAS metrics
-    that need semantic similarity (e.g., AnswerRelevancy).
+    Build Google embeddings cleanly for RAGAS metrics (`ragas>=0.4.4`).
     """
-    from app.core.config import google_api_key
+    import os
+    from app.core.config import GEMINI_EMBEDDING_MODEL, google_api_key
     from langchain_google_genai import GoogleGenerativeAIEmbeddings
     from ragas.embeddings import LangchainEmbeddingsWrapper
 
+    key = (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or google_api_key or "").strip()
+    if not key:
+        raise RuntimeError("GOOGLE_API_KEY is required to run RAGAS embedding evaluation.")
+
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/gemini-embedding-2-preview",
-        google_api_key=google_api_key or "DUMMY_KEY",
+        model=GEMINI_EMBEDDING_MODEL,
+        google_api_key=key,
         transport="rest",
     )
     return LangchainEmbeddingsWrapper(embeddings)
+
+
+def build_native_ragas_embeddings():
+    """Build native RAGAS 0.4.4 `GoogleEmbeddings` adapter cleanly via `google-genai`."""
+    from app.core.config import GEMINI_EMBEDDING_MODEL, get_genai_client
+    from ragas.embeddings import GoogleEmbeddings
+
+    return GoogleEmbeddings(
+        client=get_genai_client(),
+        model=GEMINI_EMBEDDING_MODEL,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

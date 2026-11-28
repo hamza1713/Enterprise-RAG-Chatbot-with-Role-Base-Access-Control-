@@ -56,14 +56,14 @@ def _get_embed_model():
     global _embed_model
     if _embed_model is None:
         try:
-            from app.rag.module import google_embeddings  # the project's retrying wrapper
-            _embed_model = google_embeddings
+            from app.rag.module import get_embeddings_service
+            _embed_model = get_embeddings_service()
         except ImportError:
             # Fallback: build it directly from the config
-            from app.core.config import google_api_key
+            from app.core.config import GEMINI_EMBEDDING_MODEL, google_api_key
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
             _embed_model = GoogleGenerativeAIEmbeddings(
-                model="models/gemini-embedding-2-preview",
+                model=GEMINI_EMBEDDING_MODEL,
                 google_api_key=google_api_key,
                 task_type="retrieval_query",
             )

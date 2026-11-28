@@ -1,91 +1,54 @@
 # FinSight production-readiness report
 
-Reviewed: 12 September 2026  
-Scope: React/Vite workspace, FastAPI API, SQLite/DuckDB/Chroma persistence, uploads, streaming chat, evaluation, and container deployment.
+Reviewed: 27 November 2026 (supersedes the 12 September 2026 review of the v1 SQLite/Chroma stack)
+Scope: FinSight v2 — FastAPI + LangGraph agent, PostgreSQL 17 + pgvector, OpenFGA, Redis + Taskiq, S3-compatible storage, React workspace, Compose deployment.
 
-## Executive assessment
+## Verdict
 
-FinSight is a strong staging candidate with a useful product shape: role-scoped document Q&A, natural-language SQL, document exploration, indexing controls, and evaluation. It should not be described as production-ready until staging deployment, HTTPS, secret management, backup/restore, observability, and provider quota behavior are proven.
+**Staging candidate, not production.** The v2 architecture closes most v1 launch blockers in code: durable jobs, Postgres instead of SQLite, token revocation, audit logging, metrics and tracing. It has not yet been run end to end in Docker on this release, deployed to a server, load-tested, or used with real customer data.
 
-The highest-risk issues found during this review have been fixed: non-admin uploads, PDF access bypasses, untrusted SQL access to DuckDB files, unsafe upload paths and oversized files, stale JWT permissions, startup password resets, import-time index deletion, leaked URL tokens, unbounded chat input, and incomplete stream parsing.
+## v1 blockers and where they stand
 
-## Implemented fixes
+| v1 blocker (Sep 2026) | v2 status |
+| --- | --- |
+| Async job durability (in-process queues) | Fixed: Taskiq workers on Redis with persisted `jobs` table, cancel and retry |
+| Observability | Fixed in code: request IDs, JSON logs, Prometheus `/metrics`, OpenTelemetry traces |
+| Audit events | Fixed: append-only `audit_logs` (DB trigger), admin view, CSV export |
+| SQLite / Chroma at scale | Fixed: PostgreSQL 17 + pgvector, Alembic migrations |
+| Session revocation | Fixed: `token_version` + `is_active` checked per request |
+| Evaluation gates | Partial: OWASP/ReBAC red-team gates run in CI; quality scores still from 14 questions on v1 |
+| HTTPS and deployment ownership | Open: Nginx candidate only; no TLS, domain or secrets manager configured |
+| Backups and restore | Open: documented, never drilled (Postgres + object storage + OpenFGA) |
+| Dependency and image scanning | Partial: images pinned to exact versions (27 Nov); no scanning or SBOM yet |
+| Data governance | Partial: prompt previews off by default in production; retention and DPA not defined |
 
-| Area | Finding | Resolution |
-|---|---|---|
-| Upload authorization | Any authenticated role could call `/upload-docs`. | Endpoint now requires C-Level authorization. |
-| Upload safety | Filename traversal, empty files, duplicate overwrite, arbitrary role directories, and unlimited body size were possible. | Validated filenames and roles, 20 MB limit, empty-file check, duplicate protection, PDF signature check, and safe resolved paths. |
-| PDF preview | A fallback path check could allow a file under an allowed directory even when it was not registered or authorized. | Preview now requires a registered document matching the user’s role and only serves PDFs; responses are `no-store`. |
-| SQL execution | Generated SQL ran against the shared DuckDB connection, leaving a powerful external-file surface. | Authorized tables are copied into an in-memory read-only sandbox with external access disabled, one SELECT statement, 10-second interrupt, 1,000-row limit, and memory/thread limits. |
-| JWT authorization | A token kept its old role after an administrator changed the account role. | Each request rechecks the current account role and rejects stale tokens. |
-| Credentials | Login trimmed passwords; startup reseeded/overwrote existing hashes when env values changed. | Password bytes are preserved and existing hashes are never replaced at startup; new users require stronger passwords. |
-| Search index | Importing the RAG module could erase Chroma when a migration marker was missing or dimensions changed. | Import-time destructive reset was removed; migrations now require an explicit maintenance operation and backup. |
-| Chat streaming | Browser stop only hid updates; incomplete NDJSON and split UTF-8 records were fragile. | AbortController cancellation, bounded NDJSON reader, validation, malformed-record errors, and reader cleanup added. |
-| URL security | PDF and evaluation report links placed bearer tokens in query strings. | Authenticated blob requests are used for PDF previews and report downloads. |
-| Startup | Sample-data preload always ran, including production. | `PRELOAD_SAMPLE_DATA=false` is the production default. |
-| Frontend | Fixed navigation, inconsistent copy, poor small-screen behavior, and a large initial bundle. | Responsive workspace shell, mobile nav, accessible labels, clearer copy, green/charcoal design system, lazy page loading, and branded favicon added. |
+## Changes in this review (27 Nov 2026)
 
-## Verification completed
+- **Object storage:** MinIO community images were withdrawn from Docker Hub and Quay, which broke `docker compose up`. Replaced with RustFS 1.0.1 (Apache-2.0, S3-compatible, same ports); verified with boto3 put/get/head. The app creates the bucket itself, so the `minio-init` job was removed.
+- **Pinned images:** TimescaleDB `pg17.12-ts2.32.1`, Redis `7.4.12-alpine`, Postgres `17.12-alpine`, OpenFGA `v1.23.0`, docling-serve `v1.39.0`, Phoenix `version-22.1.0`, Python `3.12.16-slim`, Node `24.22.3-alpine` (dev was on end-of-life Node 20), Nginx `1.30.8-alpine`; CI uses `pgvector/pgvector:0.8.7-pg17`.
+- **Privacy default:** `AUDIT_STORE_PROMPT_PREVIEW` now defaults to `false` when `APP_ENV=production`.
+- **Tests:** tests marked `postgres` now skip instead of failing when no database is reachable; `verification/e2e_smoke.py` had JavaScript syntax in Python and could not be imported, and is now rewritten against the real UI labels.
+- **Docs:** README rewritten for v2.
 
-- Backend regression suite: `60 passed, 8 deselected` with `-m "not slow"`.
-- Security regression suite: `20 passed` in `verification/test_security.py`.
-- Frontend stream tests: `5 passed` in `frontend/verification/ndjson.test.mjs`.
-- Frontend production build: passes with page-level lazy chunks.
-- Frontend lint: passes with `--deny-warnings` in the final CI command.
-- Browser review: sign-in and authenticated Chat/Document Library pages rendered; desktop and phone-sized layouts checked.
-- Python compilation: passes for `app`.
+## Verification
 
-Docker was not installed on the review workstation, so image build, container permissions, and production startup remain staging gates.
+| Check | Result |
+| --- | --- |
+| Backend suite, offline (`-m "not slow"`) | 106 passed, 45 skipped (need live Postgres), 0 failed |
+| Frontend tests | 11 Node + 2 Vitest passed |
+| Frontend lint (`--deny-warnings`) | Passed |
+| RustFS S3 round trip | Passed |
+| Full stack in Docker | **Not run** — blocked by host disk space; next step |
+| Postgres integration tests | **Not run locally** — run in CI against pgvector service |
+| Browser E2E (`verification/e2e_smoke.py`) | **Not run** — needs the running stack |
 
 ## Remaining launch blockers
 
-1. **HTTPS and deployment ownership.** Put an HTTPS gateway in front of the included Nginx candidate. Configure trusted proxy headers and verify the login rate limit sees the real client IP.
-2. **Secret and account migration.** Set a stable JWT secret, strong initial admin password, exact CORS origin, and provider keys. Remove or rotate demo accounts before importing any development database.
-3. **Backups and restore.** Back up SQLite, DuckDB, uploaded files, Chroma, and evaluation output as one consistent set. Test restore in a separate environment.
-4. **Observability.** Add structured logs, request IDs, metrics for latency/provider errors/token cost, alerting, and audit events for login, upload, preview, query denial, role changes, and evaluation.
-5. **Async job durability.** Indexing and evaluation state use in-process queues/locks. A restart can interrupt work; use a durable queue and persisted job state before horizontal scaling.
-6. **Evaluation gates.** Run the full RAGAS and RBAC evaluations against representative, sanitized production-like data; set release thresholds and retain reports.
-7. **Data governance.** Define document retention/deletion, source ownership, PII handling, provider data-processing terms, and who can access evaluation records.
-8. **Dependency and image scanning.** Pin/upgrade dependencies under a scheduled review, scan images and packages, and add SBOM/license checks.
-
-## Recommended feature roadmap
-
-### Release 1: reliability and trust
-
-- Durable indexing jobs with retry, pause, cancel, dead-letter state, and idempotent document versions.
-- Conversation history with explicit user-controlled retention and export/delete actions.
-- Answer feedback, citations that jump to the exact source section, and “I don’t know” confidence behavior.
-- Admin audit log, user disable/enable, role change history, and session revocation.
-- CSV schema validation, type inference preview, row/column privacy rules, and query cost/timeouts.
-- Health/readiness endpoints that test database and index availability separately.
-
-### Release 2: enterprise adoption
-
-- OIDC/SAML SSO, SCIM provisioning, MFA through the identity provider, and group-to-role mapping.
-- Object storage for documents, malware scanning, encryption at rest, retention policies, and versioned uploads.
-- Hybrid retrieval (dense + BM25), reranker fallback, document freshness controls, and per-source quality analytics.
-- Cross-source answers that clearly separate document evidence from computed data.
-- Usage dashboard by role/team, token/cost budgets, quotas, and provider fallback policy.
-- Exportable answer packets with citations, SQL, filters, timestamp, and access context.
-
-### Release 3: scale and intelligence
-
-- Postgres for shared metadata, a managed vector store, and a durable task broker when multiple replicas are needed.
-- Semantic caching with permission-aware keys and invalidation on document version changes.
-- Multimodal PDF/chart extraction with human review for low-confidence ingestion.
-- Evaluation datasets and regression gates in CI, prompt/model versioning, and controlled A/B experiments.
-- Localization, keyboard-first workflows, and a formal accessibility audit.
-
-## Architecture notes
-
-The current one-process deployment is deliberate. Chroma, the indexer queue, evaluation lock, and embedded databases have process-local state. Running multiple backend workers can produce duplicated startup work and inconsistent in-memory coordination; use one worker until those components move to shared services. The included production compose file reflects that constraint.
-
-The SQL sandbox follows DuckDB’s security guidance for untrusted SQL by disabling external access and restricting what the connection can see. File-upload validation follows OWASP guidance to authorize upload actions and enforce size limits. FastAPI’s deployment guidance also highlights that each worker has its own memory, which is relevant to the current in-process vector/index state.
-
-## Files added or updated
-
-- UI: `frontend/src/workspace.css`, redesigned `LoginPage`, responsive `AppLayout`/`Sidebar`, lazy routes, authenticated document/report downloads.
-- Security/runtime: `app/core/sql_sandbox.py`, safer `documents.py`, `admin.py`, `auth.py`, `users.py`, `config.py`, `main.py`, async AI calls, non-destructive index startup.
-- Deployment: `Dockerfile.frontend.production`, `docker-compose.production.yml`, `deploy/nginx.conf`, `deploy/production.env.example`, `deploy/README.md`.
-- Quality: `verification/test_security.py`, `frontend/verification/ndjson.test.mjs`, CI workflow, and updated test isolation.
-
+1. Run `docker compose up --build` end to end and the Postgres-backed and E2E tests against it.
+2. Commit the v2 work so the repository and CI reflect it.
+3. Deploy to staging with TLS, real secrets and a trusted proxy configuration.
+4. Re-run evaluation on v2 with 150–300 questions and enforce thresholds in CI.
+5. Load test (p95 latency, cost per 1,000 queries).
+6. Drill backup and restore across Postgres, object storage and OpenFGA.
+7. Add image scanning and an SBOM to CI.
+8. Define data retention, deletion and model-provider data-processing terms.

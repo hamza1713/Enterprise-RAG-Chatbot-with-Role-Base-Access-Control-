@@ -567,4 +567,4 @@ if __name__ == "__main__":
     ragas_csv   = str(REPORT_DIR / "evaluation_results_ragas.csv")
     sec_json    = str(REPORT_DIR / "rbac_security_report.json")
     out         = load_and_generate_report(ragas_csv, sec_json)
-    print(f"Report: {out}")
+    logger.info("Report written to %s", out)

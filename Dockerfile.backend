@@ -1,40 +1,29 @@
-# Use python:3.10-slim as base image
-FROM python:3.10-slim
+# Use python:3.12-slim as base image
+FROM python:3.12.16-slim
 
 # Prevent Python from writing .pyc files and enable unbuffered output
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive
 
-# Set working directory
 WORKDIR /app
 
-# Install system packages required for native extensions and compilation
+# Install minimal runtime/build libraries (psycopg[binary] & pyarrow ship manylinux wheels)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    g++ \
-    python3-dev \
     libgomp1 \
-    libsqlite3-dev \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency requirements file
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
 COPY . /app
 
-# Production Compose runs this image as the unprivileged application user.
+# Production Compose runs API and worker containers as the unprivileged application user.
 RUN useradd --uid 10001 --create-home finsight \
-    && mkdir -p /app/static/data /app/static/uploads /app/chroma_db \
+    && mkdir -p /app/static/data /app/static/uploads /app/static/tmp /app/static/evaluation \
     && chown -R finsight:finsight /app
 
-# Expose FastAPI application port
 EXPOSE 8000
 
-# Run Uvicorn server in dev mode with hot-reloading on 0.0.0.0:8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

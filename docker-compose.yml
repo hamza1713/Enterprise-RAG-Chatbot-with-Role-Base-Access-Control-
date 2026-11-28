@@ -1,12 +1,153 @@
-version: '3.8'
-
 services:
+  postgres:
+    image: timescale/timescaledb-ha:pg17.12-ts2.32.1
+    container_name: finsight-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-finsight}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-finsight}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - finsight-network
+
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.12-alpine
     container_name: finsight-redis
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
+    networks:
+      - finsight-network
+
+  # S3-compatible object storage. MinIO's community images were removed from Docker Hub/Quay,
+  # so RustFS (Apache-2.0, same S3 API and ports) replaces it. The app creates its bucket on startup.
+  rustfs:
+    image: rustfs/rustfs:1.0.1
+    container_name: finsight-rustfs
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-finsight-dev}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-finsight-dev-secret}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - finsight-network
+
+  docling-serve:
+    image: quay.io/docling-project/docling-serve-cpu:v1.39.0
+    container_name: finsight-docling
+    environment:
+      DOCLING_NUM_THREADS: ${DOCLING_NUM_THREADS:-4}
+      DOCLING_SERVE_ENABLE_UI: "false"
+    ports:
+      - "5001:5001"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    restart: unless-stopped
+    networks:
+      - finsight-network
+
+  openfga-db-init:
+    image: postgres:17.12-alpine
+    container_name: finsight-openfga-db-init
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+    command:
+      - /bin/sh
+      - -c
+      - >
+        psql -h postgres -U "$$POSTGRES_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'openfga'" | grep -q 1 ||
+        psql -h postgres -U "$$POSTGRES_USER" -d postgres -c "CREATE DATABASE openfga"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - finsight-network
+
+  openfga-migrate:
+    image: openfga/openfga:v1.23.0
+    container_name: finsight-openfga-migrate
+    command:
+      [
+        "migrate",
+        "--datastore-engine",
+        "postgres",
+        "--datastore-uri",
+        "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/openfga?sslmode=disable",
+      ]
+    depends_on:
+      openfga-db-init:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - finsight-network
+
+  openfga:
+    image: openfga/openfga:v1.23.0
+    container_name: finsight-openfga
+    command: ["run"]
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/openfga?sslmode=disable
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+      OPENFGA_AUTHN_METHOD: ${OPENFGA_AUTHN_METHOD:-none}
+      OPENFGA_AUTHN_PRESHARED_KEYS: ${OPENFGA_AUTHN_PRESHARED_KEYS:-}
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      openfga-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - finsight-network
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: finsight-migrate
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-finsight}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
     networks:
       - finsight-network
 
@@ -15,20 +156,95 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: finsight-backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONDONTWRITEBYTECODE=1
-      - ANONYMIZED_TELEMETRY=False
-      - CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000
-      - REDIS_URL=redis://redis:6379/0
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-finsight}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: s3
+      S3_ENDPOINT_URL: http://rustfs:9000
+      S3_BUCKET: ${S3_BUCKET:-finsight-documents}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-finsight-dev}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-finsight-dev-secret}
+      DOCLING_SERVE_URL: http://docling-serve:5001
+      OPENFGA_API_URL: http://openfga:8080
+      OPENFGA_STORE_NAME: ${OPENFGA_STORE_NAME:-finsight}
+      OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:-}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      CONTEXTUAL_RETRIEVAL_ENABLED: ${CONTEXTUAL_RETRIEVAL_ENABLED:-true}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finsight-api}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+      AUDIT_STORE_PROMPT_PREVIEW: ${AUDIT_STORE_PROMPT_PREVIEW:-true}
     volumes:
       - .:/app
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      openfga:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - finsight-network
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: finsight-worker
+    command: ["taskiq", "worker", "app.workers.broker:broker", "--workers", "2"]
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-finsight}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: s3
+      S3_ENDPOINT_URL: http://rustfs:9000
+      S3_BUCKET: ${S3_BUCKET:-finsight-documents}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-finsight-dev}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-finsight-dev-secret}
+      DOCLING_SERVE_URL: http://docling-serve:5001
+      OPENFGA_API_URL: http://openfga:8080
+      OPENFGA_STORE_NAME: ${OPENFGA_STORE_NAME:-finsight}
+      OPENFGA_API_TOKEN: ${OPENFGA_API_TOKEN:-}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      CONTEXTUAL_RETRIEVAL_ENABLED: ${CONTEXTUAL_RETRIEVAL_ENABLED:-true}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finsight-api}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN:-}
+      AUDIT_STORE_PROMPT_PREVIEW: ${AUDIT_STORE_PROMPT_PREVIEW:-true}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      openfga:
+        condition: service_started
     restart: unless-stopped
     networks:
       - finsight-network
@@ -41,8 +257,8 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_BASE_URL=http://localhost:8000
-      - CHOKIDAR_USEPOLLING=true
+      VITE_API_BASE_URL: http://localhost:8000
+      CHOKIDAR_USEPOLLING: "true"
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -51,6 +267,28 @@ services:
       - backend
     networks:
       - finsight-network
+
+  phoenix:
+    image: arizephoenix/phoenix:version-22.1.0
+    container_name: finsight-phoenix
+    profiles: ["observability"]
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - phoenix-data:/phoenix
+    environment:
+      PHOENIX_WORKING_DIR: /phoenix
+    restart: unless-stopped
+    networks:
+      - finsight-network
+
+volumes:
+  pg-data:
+  redis-data:
+  rustfs-data:
+  phoenix-data:
 
 networks:
   finsight-network:
