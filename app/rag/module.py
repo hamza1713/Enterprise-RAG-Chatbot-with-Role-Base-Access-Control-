@@ -49,7 +49,8 @@ from app.storage import get_storage_backend
 logger = logging.getLogger("FinSight.rag")
 
 # Testable lazy singletons (zero DUMMY_KEY instantiation at import time)
-_factory_lock = threading.Lock()
+# Re-entrant: factories may call one another while holding it (hybrid store -> embeddings).
+_factory_lock = threading.RLock()
 model = None
 hybrid_store: PgVectorHybridStore | None = None
 embeddings_service: GeminiEmbedding2Service | None = None
@@ -67,9 +68,12 @@ def get_embeddings_service() -> GeminiEmbedding2Service:
 def get_hybrid_store() -> PgVectorHybridStore:
     global hybrid_store
     if hybrid_store is None:
+        # Resolve the embeddings singleton before taking the lock: it acquires the
+        # same lock, and nesting it under a plain Lock deadlocked the first RAG call.
+        embeddings = get_embeddings_service()
         with _factory_lock:
             if hybrid_store is None:
-                hybrid_store = PgVectorHybridStore(embeddings=get_embeddings_service())
+                hybrid_store = PgVectorHybridStore(embeddings=embeddings)
     return hybrid_store
 
 
