@@ -1,7 +1,7 @@
 """Phase 3 append-only audit_logs table and Postgres immutability trigger.
 
-Revision ID: 0003_phase3_audit_and_observability
-Revises: 0002_phase2_rebac_threads_semantics
+Revision ID: 0003_phase3_audit
+Revises: 0002_phase2_rebac_threads
 Create Date: 2026-11-16
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0003_phase3_audit_and_observability"
-down_revision: Union[str, Sequence[str], None] = "0002_phase2_rebac_threads_semantics"
+revision: str = "0003_phase3_audit"
+down_revision: Union[str, Sequence[str], None] = "0002_phase2_rebac_threads"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

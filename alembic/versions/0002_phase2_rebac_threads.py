@@ -1,6 +1,6 @@
 """Phase 2 ReBAC ACL tuples, OIDC identity columns, persistent threads, and semantic models.
 
-Revision ID: 0002_phase2_rebac_threads_semantics
+Revision ID: 0002_phase2_rebac_threads
 Revises: 0001_phase1_postgres_pgvector
 Create Date: 2026-11-16
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0002_phase2_rebac_threads_semantics"
+revision: str = "0002_phase2_rebac_threads"
 down_revision: Union[str, Sequence[str], None] = "0001_phase1_postgres_pgvector"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
