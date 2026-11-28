@@ -58,9 +58,24 @@ def _login(username: str, password: str) -> dict[str, str]:
 
 
 def test_import_rag_module_has_zero_dummy_key_clients():
-    assert rag_module.model is None or not hasattr(rag_module.model, "google_api_key")
-    assert rag_module.hybrid_store is None or isinstance(rag_module.hybrid_store, object)
-    assert rag_module.embeddings_service is None or isinstance(rag_module.embeddings_service, object)
+    # Import in a fresh interpreter: earlier tests in this process legitimately build the
+    # lazy singletons, so checking them here would test call order, not import-time behaviour.
+    import subprocess
+    import sys
+
+    probe = (
+        "import app.rag.module as m; "
+        "print(m.model is None, m.hybrid_store is None, m.embeddings_service is None)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip().splitlines()[-1] == "True True True"
 
 
 def test_local_object_storage_crud_and_traversal_guards(tmp_path):

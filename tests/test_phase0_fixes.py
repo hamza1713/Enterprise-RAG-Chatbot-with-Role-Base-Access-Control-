@@ -236,14 +236,14 @@ def test_chat_stream_checks_cache_before_classifier_and_tracks_history(postgres_
     token = _get_token("hr", "hr123")
     cache_manager.clear()
 
-    class _FakeStreamChain:
-        async def astream(self, payload):
-            yield {"context": [Document(page_content="Leave policy", metadata={"source": "leave.md"})]}
-            for tok in ("Employees get ", "20 paid leave days."):
-                yield {"answer": tok}
+    # v2's compatibility path answers via ask_rag(), which resolves get_rag_chain from
+    # app.rag.module itself, so the RAG answer is mocked at ask_rag.
+    fake_answer = AsyncMock(
+        return_value={"answer": "Employees get 20 paid leave days.", "sources": ["leave.md"]}
+    )
 
     with patch("app.api.chat.detect_query_type_llm", return_value="RAG") as mock_clf, patch(
-        "app.api.chat.get_rag_chain", return_value=_FakeStreamChain()
+        "app.api.chat.ask_rag", new=fake_answer
     ):
         r1 = client.post(
             "/chat-stream",

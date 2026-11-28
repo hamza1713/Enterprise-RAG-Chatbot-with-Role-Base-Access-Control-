@@ -152,7 +152,9 @@ def test_chat_sql_mode(mock_ask_csv, mock_detect, c_level_headers):
 
 
 def test_create_role_no_auth():
-    res = client.post("/create-role", data={"role_name": "bad"})
+    # Fresh client: the shared one holds an admin session cookie from earlier logins.
+    anonymous = TestClient(app)
+    res = anonymous.post("/create-role", data={"role_name": "bad"})
     assert res.status_code in (401, 403)
 
 
