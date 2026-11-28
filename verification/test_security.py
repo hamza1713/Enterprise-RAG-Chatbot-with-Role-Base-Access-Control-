@@ -221,7 +221,11 @@ def test_pdf_requires_department_authorization(pg_db):
 
         allowed_by_id = client.get("/preview-pdf", params={"doc_id": doc_id}, headers=headers("finance", "finance123"))
         assert allowed_by_id.status_code == 200
-        assert client.get("/preview-pdf", params={"filepath": legacy_path, "token": headers()["Authorization"][7:]}).status_code in (401, 403)
+        # A bearer token in the URL must never authenticate. Login also sets the HttpOnly
+        # session cookie on this shared client, so clear it to test the query token alone.
+        url_token = headers()["Authorization"][7:]
+        client.cookies.clear()
+        assert client.get("/preview-pdf", params={"filepath": legacy_path, "token": url_token}).status_code == 401
     finally:
         with sync_session() as db:
             db.execute(delete(DocumentRecord).where(DocumentRecord.id == doc_id))
